@@ -1,0 +1,16 @@
+{
+  "name": "ninzy-downloader-backend",
+  "version": "1.0.0",
+  "description": "Backend downloader TikTok & YouTube untuk NinzyCompress (dipakai lewat Railway)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
