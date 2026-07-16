@@ -41,6 +41,50 @@ app.use(cors({
 }));
 
 const PORT = process.env.PORT || 3000;
+
+// ── Admin PIN (server-side only, TIDAK PERNAH dikirim ke browser) ─────────
+// Set ini di Railway → Variables → ADMIN_PIN. Kalau gak diset, endpoint
+// verifikasi PIN otomatis nonaktif (return error, bukan lolos gratis).
+const ADMIN_PIN = process.env.ADMIN_PIN || null;
+// Opsional: kalau diisi eksplisit, token tetap valid walau server restart.
+// Kalau gak diisi, otomatis random tiap kali server nyala (aman, cuma efek
+// sampingnya: user perlu masukin PIN ulang tiap Railway redeploy).
+const ADMIN_TOKEN_SECRET = process.env.ADMIN_TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
+const ADMIN_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // token unlock berlaku 2 jam
+
+function signAdminToken(expiresAt) {
+  const sig = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(String(expiresAt)).digest('hex');
+  return `${expiresAt}.${sig}`;
+}
+function verifyAdminToken(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return false;
+  const [expiresAtStr, sig] = token.split('.');
+  const expiresAt = Number(expiresAtStr);
+  if (!expiresAt || !sig || Date.now() > expiresAt) return false;
+  const expected = crypto.createHmac('sha256', ADMIN_TOKEN_SECRET).update(String(expiresAt)).digest('hex');
+  try {
+    return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+// Rate limit KETAT khusus buat percobaan PIN — proteksi brute-force.
+const adminPinRateMap = new Map();
+function adminPinRateLimit(req, res, next) {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const maxReq = 5;
+  const entry = adminPinRateMap.get(ip) || { count: 0, start: now };
+  if (now - entry.start > windowMs) { entry.count = 0; entry.start = now; }
+  entry.count++;
+  adminPinRateMap.set(ip, entry);
+  if (entry.count > maxReq) {
+    return res.status(429).json({ success: false, error: 'Terlalu banyak percobaan PIN salah. Coba lagi 15 menit lagi.' });
+  }
+  next();
+}
 const YTDLP_BIN = process.env.YTDLP_BIN || 'yt-dlp';
 const PROCESS_TIMEOUT_MS = 3 * 60 * 1000; // 3 menit maksimum per proses
 
@@ -213,6 +257,40 @@ app.post('/api/info', rateLimit, async (req, res) => {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
   }
 
+  const PLAYLIST_CAP = 5; // dibatasi biar konsisten sama limit batch & gak berat di server gratisan
+  const isPlaylistUrl = /youtube\.com/i.test(url) && /[?&]list=/.test(url);
+
+  if (isPlaylistUrl) {
+    try {
+      const { stdout } = await runYtDlp([
+        '--flat-playlist', '-j', '--no-warnings', '--playlist-end', String(PLAYLIST_CAP),
+        '--socket-timeout', '20', ...cookieArgs(), url
+      ], { timeoutMs: 45000 });
+
+      const entries = stdout.split('\n')
+        .filter(l => l.trim().startsWith('{'))
+        .map(l => JSON.parse(l));
+
+      if (!entries.length) throw new Error('Playlist kosong atau tidak bisa dibaca.');
+
+      return res.json({
+        success: true,
+        isPlaylist: true,
+        platform: 'YouTube',
+        playlistTitle: entries[0].playlist_title || entries[0].playlist || 'Playlist YouTube',
+        entries: entries.map(e => ({
+          id: e.id,
+          title: e.title || 'Video',
+          thumbnail: e.thumbnails && e.thumbnails.length ? e.thumbnails.at(-1).url : '',
+          url: `https://www.youtube.com/watch?v=${e.id}`
+        })),
+        capped: entries.length >= PLAYLIST_CAP
+      });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: friendlyError(e.message) });
+    }
+  }
+
   try {
     const { stdout } = await runYtDlp([
       '-j', '--no-warnings', '--no-playlist', '--socket-timeout', '20', ...cookieArgs(), url
@@ -251,6 +329,9 @@ app.post('/api/info', rateLimit, async (req, res) => {
       if (hasSubs) qualities.push({ label: '📝 Subtitle (.srt)', value: 'subtitle' });
     }
 
+    const hasThumbnail = !!(info.thumbnail || (info.thumbnails && info.thumbnails.length));
+    if (hasThumbnail) qualities.push({ label: '🖼️ Thumbnail (Gambar)', value: 'thumbnail' });
+
     res.json({
       success: true,
       title: info.title || (isPhotoSet ? 'Postingan Foto' : 'Video'),
@@ -272,20 +353,27 @@ app.post('/api/info', rateLimit, async (req, res) => {
 });
 
 app.get('/api/download', rateLimit, async (req, res) => {
-  const { url, quality = 'best' } = req.query;
+  const { url, quality = 'best', trimStart, trimEnd } = req.query;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ success: false, error: 'URL wajib diisi.' });
   }
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
   }
-  if (quality !== 'photos' && quality !== 'subtitle' && !QUALITY_FORMATS[quality]) {
+  if (quality !== 'photos' && quality !== 'subtitle' && quality !== 'thumbnail' && !QUALITY_FORMATS[quality]) {
     return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid.' });
   }
+
+  // Trim durasi: cuma berlaku buat download video/audio biasa, bukan buat
+  // foto/subtitle/thumbnail yang gak punya konsep "durasi".
+  const ts = Number(trimStart), te = Number(trimEnd);
+  const hasTrim = Number.isFinite(ts) && Number.isFinite(te) && ts >= 0 && te > ts &&
+                  !['photos', 'subtitle', 'thumbnail', 'preview'].includes(quality);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ninzydl-'));
   const isPhotos = quality === 'photos';
   const isSubtitle = quality === 'subtitle';
+  const isThumbnail = quality === 'thumbnail';
   const isPreview = quality === 'preview';
   const isAudio = quality === 'audio' || quality === 'audio_opus';
   const audioFormat = quality === 'audio_opus' ? 'opus' : 'mp3';
@@ -299,6 +387,12 @@ app.get('/api/download', rateLimit, async (req, res) => {
     // Slideshow foto: ambil SEMUA gambar dalam post ini (bukan playlist
     // eksternal), lalu nanti di-zip jadi satu file.
     args.push('--yes-playlist', '-o', path.join(tmpDir, '%(playlist_index|1)s.%(ext)s'));
+  } else if (isThumbnail) {
+    args.push(
+      '--no-playlist', '--skip-download',
+      '--write-thumbnail', '--convert-thumbnails', 'jpg',
+      '-o', path.join(tmpDir, '%(id)s.%(ext)s')
+    );
   } else if (isSubtitle) {
     // Cuma subtitle-nya aja, gak download videonya. Ambil manual dulu kalau
     // ada, fallback ke auto-generated. Prioritas Indonesia + Inggris.
@@ -312,9 +406,11 @@ app.get('/api/download', rateLimit, async (req, res) => {
   } else if (isAudio) {
     args.push('--no-playlist', '-o', path.join(tmpDir, '%(id)s.%(ext)s'));
     args.push('-x', '--audio-format', audioFormat, '-f', QUALITY_FORMATS[quality]);
+    if (hasTrim) args.push('--download-sections', `*${ts}-${te}`, '--force-keyframes-at-cuts');
   } else {
     args.push('--no-playlist', '-o', path.join(tmpDir, '%(id)s.%(ext)s'));
     args.push('--merge-output-format', 'mp4', '-f', QUALITY_FORMATS[quality]);
+    if (hasTrim) args.push('--download-sections', `*${ts}-${te}`, '--force-keyframes-at-cuts');
   }
   args.push(...cookieArgs(), url);
 
@@ -380,6 +476,22 @@ app.get('/api/download', rateLimit, async (req, res) => {
       res.setHeader('Content-Length', stat.size);
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
       const stream = fs.createReadStream(zipPath);
+      stream.pipe(res);
+      stream.on('close', cleanup);
+      stream.on('error', () => { cleanup(); if (!res.headersSent) res.status(500).end(); });
+      return;
+    }
+
+    if (isThumbnail) {
+      const files = fs.readdirSync(tmpDir).filter(f => !f.startsWith('.'));
+      if (!files.length) throw new Error('Thumbnail tidak ditemukan.');
+      const filePath = path.join(tmpDir, files[0]);
+      const stat = fs.statSync(filePath);
+      const safeName = `ninzy_thumbnail_${crypto.randomBytes(3).toString('hex')}.jpg`;
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      const stream = fs.createReadStream(filePath);
       stream.pipe(res);
       stream.on('close', cleanup);
       stream.on('error', () => { cleanup(); if (!res.headersSent) res.status(500).end(); });
@@ -509,6 +621,32 @@ app.post('/api/batch-download', batchRateLimit, async (req, res) => {
       res.end();
     }
   }
+});
+
+app.post('/api/admin/verify-pin', adminPinRateLimit, (req, res) => {
+  if (!ADMIN_PIN) {
+    return res.status(500).json({ success: false, error: 'ADMIN_PIN belum diset di server (Railway → Variables).' });
+  }
+  const { pin } = req.body || {};
+  if (!pin || typeof pin !== 'string') {
+    return res.status(400).json({ success: false, error: 'PIN wajib diisi.' });
+  }
+  let match = false;
+  try {
+    match = pin.length === ADMIN_PIN.length && crypto.timingSafeEqual(Buffer.from(pin), Buffer.from(ADMIN_PIN));
+  } catch {
+    match = false;
+  }
+  if (!match) {
+    return res.status(401).json({ success: false, error: 'PIN salah.' });
+  }
+  const expiresAt = Date.now() + ADMIN_TOKEN_TTL_MS;
+  res.json({ success: true, token: signAdminToken(expiresAt), expiresAt });
+});
+
+app.post('/api/admin/verify-token', (req, res) => {
+  const { token } = req.body || {};
+  res.json({ success: verifyAdminToken(token) });
 });
 
 app.listen(PORT, () => {
