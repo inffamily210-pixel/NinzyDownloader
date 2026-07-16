@@ -19,6 +19,37 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const admin = require('firebase-admin');
+
+// ── Firebase Admin SDK (server-side, punya akses penuh, TIDAK terikat
+// Firestore Security Rules) ────────────────────────────────────────────
+// Dipakai buat operasi sensitif (kasih/cabut premium, konfirmasi
+// pembayaran, ban user, redeem kode) supaya gak bisa lagi ditulis langsung
+// dari browser client seperti sebelumnya.
+//
+// Setup di Railway → Variables:
+//   FIREBASE_SERVICE_ACCOUNT = isi lengkap file JSON service account
+//   (Firebase Console → Project Settings → Service Accounts → Generate new
+//   private key), di-paste utuh sebagai satu baris JSON.
+let fsDb = null;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    fsDb = admin.firestore();
+    console.log('[firebase-admin] Terhubung ke Firestore.');
+  } else {
+    console.warn('[firebase-admin] FIREBASE_SERVICE_ACCOUNT belum diset — endpoint admin/premium akan nonaktif.');
+  }
+} catch (e) {
+  console.error('[firebase-admin] Gagal init:', e.message);
+}
+function requireFirebaseAdmin(req, res, next) {
+  if (!fsDb) {
+    return res.status(500).json({ success: false, error: 'Server belum terhubung ke Firebase (FIREBASE_SERVICE_ACCOUNT belum diset di Railway).' });
+  }
+  next();
+}
 
 const app = express();
 app.use(express.json());
@@ -96,6 +127,18 @@ const PROCESS_TIMEOUT_MS = 3 * 60 * 1000; // 3 menit maksimum per proses
 const COOKIES_FILE = path.join(__dirname, 'cookies.txt');
 function cookieArgs() {
   return fs.existsSync(COOKIES_FILE) ? ['--cookies', COOKIES_FILE] : [];
+}
+
+// ── YouTube "Sign in to confirm you're not a bot" workaround ─────────────
+// Sejak awal 2026 YouTube makin agresif nge-block akses dari IP server/cloud
+// (termasuk Railway). Minta yt-dlp nyamar sebagai client Android biasanya
+// berhasil ngelewatin blokir ini untuk kebanyakan video publik, tanpa perlu
+// cookies. Kalau masih gagal juga di video tertentu, cookies.txt (di atas)
+// jadi jalan pintas berikutnya.
+function ytClientArgs(url) {
+  return /youtube\.com|youtu\.be/i.test(url)
+    ? ['--extractor-args', 'youtube:player_client=android']
+    : [];
 }
 
 // ── Rate limit sederhana (per IP, in-memory) ────────────────────────────
@@ -264,7 +307,7 @@ app.post('/api/info', rateLimit, async (req, res) => {
     try {
       const { stdout } = await runYtDlp([
         '--flat-playlist', '-j', '--no-warnings', '--playlist-end', String(PLAYLIST_CAP),
-        '--socket-timeout', '20', ...cookieArgs(), url
+        '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
       ], { timeoutMs: 45000 });
 
       const entries = stdout.split('\n')
@@ -293,7 +336,7 @@ app.post('/api/info', rateLimit, async (req, res) => {
 
   try {
     const { stdout } = await runYtDlp([
-      '-j', '--no-warnings', '--no-playlist', '--socket-timeout', '20', ...cookieArgs(), url
+      '-j', '--no-warnings', '--no-playlist', '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
     ], { timeoutMs: 45000 });
 
     const firstLine = stdout.split('\n').find(l => l.trim().startsWith('{'));
@@ -412,7 +455,7 @@ app.get('/api/download', rateLimit, async (req, res) => {
     args.push('--merge-output-format', 'mp4', '-f', QUALITY_FORMATS[quality]);
     if (hasTrim) args.push('--download-sections', `*${ts}-${te}`, '--force-keyframes-at-cuts');
   }
-  args.push(...cookieArgs(), url);
+  args.push(...cookieArgs(), ...ytClientArgs(url), url);
 
   const cleanup = () => {
     fs.rm(tmpDir, { recursive: true, force: true }, () => {});
@@ -571,7 +614,7 @@ app.post('/api/batch-download', batchRateLimit, async (req, res) => {
       } else {
         args.push('--merge-output-format', 'mp4', '-f', QUALITY_FORMATS[quality] || QUALITY_FORMATS.best);
       }
-      args.push(...cookieArgs(), u);
+      args.push(...cookieArgs(), ...ytClientArgs(u), u);
 
       try {
         // Timeout per-item lebih pendek biar total batch gak kelamaan kalau
