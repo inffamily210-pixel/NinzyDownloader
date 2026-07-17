@@ -100,6 +100,18 @@ function verifyAdminToken(token) {
   }
 }
 
+// Middleware: wajib bawa token admin yang valid (Authorization: Bearer <token>)
+// buat semua endpoint yang ngubah data sensitif. Token ini didapat dari
+// /api/admin/verify-pin, jadi cuma orang yang tau PIN yang bisa dapet token.
+function requireAdminToken(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!verifyAdminToken(token)) {
+    return res.status(401).json({ success: false, error: 'Sesi admin gak valid/expired, login PIN ulang.' });
+  }
+  next();
+}
+
 // Rate limit KETAT khusus buat percobaan PIN — proteksi brute-force.
 const adminPinRateMap = new Map();
 function adminPinRateLimit(req, res, next) {
@@ -731,6 +743,241 @@ app.post('/api/admin/verify-pin', adminPinRateLimit, (req, res) => {
 app.post('/api/admin/verify-token', (req, res) => {
   const { token } = req.body || {};
   res.json({ success: verifyAdminToken(token) });
+});
+
+// ── Kode Aktivasi Premium (activationCodes collection) ────────────────────
+// PENTING: ini yang benerin celah paling kritis — sebelumnya redeem cuma
+// ngebaca angka dari format kode ("NINZY-30-xxx" = 30 hari) tanpa pernah
+// cek ke server apakah kode itu beneran pernah di-generate admin. Sekarang
+// kode WAJIB ada & valid di Firestore sebelum premium diberikan.
+
+app.post('/api/admin/create-activation-code', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { code, days, maxUses, buyerName, buyerWa, note, price } = req.body || {};
+  if (!code || typeof code !== 'string' || !/^[A-Z0-9-]{4,40}$/.test(code)) {
+    return res.status(400).json({ success: false, error: 'Format kode tidak valid.' });
+  }
+  const d = Number(days);
+  if (!Number.isFinite(d) || d <= 0 || d > 3650) {
+    return res.status(400).json({ success: false, error: 'Jumlah hari tidak valid.' });
+  }
+  const mu = Number(maxUses) || 1;
+
+  try {
+    const ref = fsDb.collection('activationCodes').doc(code);
+    const existing = await ref.get();
+    if (existing.exists) {
+      return res.status(409).json({ success: false, error: 'Kode ini sudah pernah dibuat sebelumnya, pakai kode lain.' });
+    }
+    await ref.set({
+      code, days: d, maxUses: mu, usedCount: 0, active: true,
+      buyerName: buyerName || '', buyerWa: buyerWa || '', note: note || '', price: price || '',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    res.json({ success: true, code, days: d, maxUses: mu });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal menyimpan kode: ' + e.message });
+  }
+});
+
+app.post('/api/admin/toggle-activation-code', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { code, active } = req.body || {};
+  if (!code) return res.status(400).json({ success: false, error: 'Kode wajib diisi.' });
+  try {
+    await fsDb.collection('activationCodes').doc(code).update({ active: !!active });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal update kode: ' + e.message });
+  }
+});
+
+app.get('/api/admin/activation-codes', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  try {
+    const snap = await fsDb.collection('activationCodes').orderBy('createdAt', 'desc').limit(200).get();
+    const codes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    res.json({ success: true, codes });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal ambil daftar kode: ' + e.message });
+  }
+});
+
+app.post('/api/redeem-code', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const { email, code: rawCode } = req.body || {};
+  const code = (rawCode || '').trim().toUpperCase();
+  const cleanEmail = (email || '').trim().toLowerCase();
+
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    return res.status(400).json({ success: false, error: 'Kamu harus login dulu buat redeem kode.' });
+  }
+  if (!code) {
+    return res.status(400).json({ success: false, error: 'Masukkan kode aktivasi dulu.' });
+  }
+
+  try {
+    const codeRef = fsDb.collection('activationCodes').doc(code);
+    const userRef = fsDb.collection('users').doc(cleanEmail);
+
+    // Transaction: pastikan kode gak bisa dipakai 2x barengan (race condition)
+    const result = await fsDb.runTransaction(async (tx) => {
+      const codeSnap = await tx.get(codeRef);
+      if (!codeSnap.exists) {
+        throw new Error('Kode aktivasi tidak ditemukan. Cek kembali penulisan kodenya.');
+      }
+      const c = codeSnap.data();
+      if (!c.active) {
+        throw new Error('Kode ini sudah tidak aktif.');
+      }
+      const maxUses = c.maxUses || 1;
+      const usedCount = c.usedCount || 0;
+      if (usedCount >= maxUses) {
+        throw new Error(`Kode ini sudah mencapai batas ${maxUses} pengguna.`);
+      }
+
+      const userSnap = await tx.get(userRef);
+      const currentExpiry = (userSnap.exists && userSnap.data().premiumExpiry) || 0;
+      const base = currentExpiry > Date.now() ? currentExpiry : Date.now();
+      const newExpiry = base + c.days * 86400000;
+      const totalDaysLeft = Math.ceil((newExpiry - Date.now()) / 86400000);
+
+      tx.update(codeRef, { usedCount: usedCount + 1 });
+      tx.set(userRef, {
+        premiumExpiry: newExpiry, premiumDays: totalDaysLeft,
+        premiumSetAt: Date.now(), premiumSetBy: 'redeem-code'
+      }, { merge: true });
+
+      return { days: c.days, newExpiry, totalDaysLeft };
+    });
+
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message || 'Gagal redeem kode.' });
+  }
+});
+
+// ── Premium (admin) ────────────────────────────────────────────────────
+app.post('/api/admin/grant-premium', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const email = (req.body?.email || '').trim().toLowerCase();
+  const days = Number(req.body?.days);
+  if (!email || !email.includes('@')) return res.status(400).json({ success: false, error: 'Email tidak valid.' });
+  if (!Number.isFinite(days) || days <= 0 || days > 3650) return res.status(400).json({ success: false, error: 'Jumlah hari tidak valid.' });
+  try {
+    const ref = fsDb.collection('users').doc(email);
+    const snap = await ref.get();
+    const existing = snap.exists ? (snap.data().premiumExpiry || 0) : 0;
+    const base = existing > Date.now() ? existing : Date.now();
+    const expiry = base + days * 86400000;
+    const totalDays = Math.round((expiry - Date.now()) / 86400000);
+    await ref.set({ premiumExpiry: expiry, premiumDays: totalDays, premiumSetAt: Date.now(), premiumSetBy: 'admin' }, { merge: true });
+    res.json({ success: true, expiry, totalDays, extended: existing > Date.now() });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal memberi premium: ' + e.message });
+  }
+});
+
+app.post('/api/admin/revoke-premium', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const email = (req.body?.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.status(400).json({ success: false, error: 'Email tidak valid.' });
+  try {
+    await fsDb.collection('users').doc(email).set({ premiumExpiry: 0, premiumSetBy: 'admin-revoke' }, { merge: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal mencabut premium: ' + e.message });
+  }
+});
+
+// ── Payment (admin) ────────────────────────────────────────────────────
+app.post('/api/admin/confirm-payment', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { paymentId, status, email, days } = req.body || {};
+  if (!paymentId || !['approved', 'rejected'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'Data tidak lengkap/valid.' });
+  }
+  try {
+    await fsDb.collection('payments').doc(paymentId).update({ status, processedAt: Date.now() });
+
+    let premiumResult = null;
+    if (status === 'approved' && email && Number(days) > 0) {
+      const cleanEmail = email.trim().toLowerCase();
+      const ref = fsDb.collection('users').doc(cleanEmail);
+      const snap = await ref.get();
+      const existing = snap.exists ? (snap.data().premiumExpiry || 0) : 0;
+      const base = existing > Date.now() ? existing : Date.now();
+      const expiry = base + Number(days) * 86400000;
+      const totalDays = Math.round((expiry - Date.now()) / 86400000);
+      await ref.set({ premiumExpiry: expiry, premiumDays: totalDays, premiumSetAt: Date.now(), premiumSetBy: 'admin-payment' }, { merge: true });
+      premiumResult = { expiry, totalDays, extended: existing > Date.now() };
+    }
+    res.json({ success: true, premium: premiumResult });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal proses payment: ' + e.message });
+  }
+});
+
+// ── Moderasi (admin) ───────────────────────────────────────────────────
+app.post('/api/admin/ban-user', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const email = (req.body?.email || '').trim().toLowerCase();
+  const reason = (req.body?.reason || '').trim() || 'Tidak ada alasan';
+  if (!email || !email.includes('@')) return res.status(400).json({ success: false, error: 'Email tidak valid.' });
+  try {
+    await fsDb.collection('bannedUsers').doc(email).set({ email, reason, bannedAt: Date.now() });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal ban user: ' + e.message });
+  }
+});
+
+app.post('/api/admin/unban-user', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const email = (req.body?.email || '').trim().toLowerCase();
+  if (!email) return res.status(400).json({ success: false, error: 'Email tidak valid.' });
+  try {
+    await fsDb.collection('bannedUsers').doc(email).delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal unban user: ' + e.message });
+  }
+});
+
+app.post('/api/admin/warn-user', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const email = (req.body?.email || '').trim().toLowerCase();
+  const reason = (req.body?.reason || '').trim() || 'Tidak ada alasan';
+  if (!email || !email.includes('@')) return res.status(400).json({ success: false, error: 'Email tidak valid.' });
+  try {
+    const ref = fsDb.collection('userWarnings').doc(email);
+    const doc = await ref.get();
+    const count = (doc.exists ? (doc.data().count || 0) : 0) + 1;
+    await ref.set({ email, count, lastReason: reason, lastAt: Date.now() }, { merge: true });
+    res.json({ success: true, count });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal memberi warning: ' + e.message });
+  }
+});
+
+// ── Kupon Diskon Pembayaran (beda dari kode aktivasi — ini persen-based,
+// dipakai pas checkout QRIS/GoPay) ─────────────────────────────────────
+app.post('/api/admin/create-discount-coupon', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { code, percent, maxUses, days } = req.body || {};
+  const cleanCode = (code || '').trim().toUpperCase();
+  if (!cleanCode || !/^[A-Z0-9-]{2,40}$/.test(cleanCode)) return res.status(400).json({ success: false, error: 'Format kode tidak valid.' });
+  const p = Number(percent);
+  if (!Number.isFinite(p) || p <= 0 || p > 100) return res.status(400).json({ success: false, error: 'Persentase tidak valid.' });
+  try {
+    await fsDb.collection('coupons').doc(cleanCode).set({
+      code: cleanCode, percent: p, maxUses: Number(maxUses) || 50, usedCount: 0,
+      active: true, expiresAt: Date.now() + (Number(days) || 30) * 86400000, createdAt: Date.now()
+    });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal membuat kupon: ' + e.message });
+  }
+});
+
+app.post('/api/admin/toggle-discount-coupon', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { code, active } = req.body || {};
+  if (!code) return res.status(400).json({ success: false, error: 'Kode wajib diisi.' });
+  try {
+    await fsDb.collection('coupons').doc(code).update({ active: !!active });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal update kupon: ' + e.message });
+  }
 });
 
 app.listen(PORT, () => {
