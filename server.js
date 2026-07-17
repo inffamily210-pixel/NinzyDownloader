@@ -420,6 +420,7 @@ app.post('/api/info', rateLimit, async (req, res) => {
       thumbnail: info.thumbnail || (info.thumbnails && info.thumbnails.length ? info.thumbnails.at(-1).url : ''),
       duration: info.duration || 0,
       uploader: info.uploader || info.channel || '',
+      uploaderUrl: info.uploader_url || info.channel_url || null,
       platform: detectPlatform(url),
       isPhotoSet,
       photoCount: isPhotoSet ? info.entries.length : 0,
@@ -977,6 +978,37 @@ app.post('/api/admin/toggle-discount-coupon', requireAdminToken, requireFirebase
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: 'Gagal update kupon: ' + e.message });
+  }
+});
+
+// Profil pembuat video (followers, avatar, bio) — proses TERPISAH dari info
+// video karena butuh "mengunjungi" halaman profil, bukan halaman video.
+// Dukungannya beda-beda tiap platform (yt-dlp gak selalu dapet semua field
+// buat semua situs), jadi ini best-effort: field yang gak ketemu ya null aja.
+app.get('/api/creator-profile', rateLimit, async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== 'string' || !isSupportedUrl(url)) {
+    return res.status(400).json({ success: false, error: 'URL profil tidak valid.' });
+  }
+  try {
+    const { stdout } = await runYtDlp([
+      '--flat-playlist', '--dump-single-json', '--playlist-items', '0',
+      '--no-warnings', '--socket-timeout', '10', ...cookieArgs(), ...ytClientArgs(url), url
+    ], { timeoutMs: 20000 });
+
+    const data = JSON.parse(stdout.split('\n').find(l => l.trim().startsWith('{')) || '{}');
+    const avatar = (data.thumbnails && data.thumbnails.length) ? data.thumbnails.at(-1).url : (data.thumbnail || null);
+
+    res.json({
+      success: true,
+      name: data.channel || data.uploader || data.title || null,
+      avatar,
+      followers: formatCount(data.channel_follower_count),
+      bio: data.description ? data.description.slice(0, 600) : null,
+      url
+    });
+  } catch (e) {
+    res.status(404).json({ success: false, error: 'Info profil gak tersedia buat platform ini.' });
   }
 });
 
