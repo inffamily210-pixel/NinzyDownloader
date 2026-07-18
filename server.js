@@ -1138,11 +1138,21 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
 
     // Avatar creator biasanya ditandai id spesifik ("avatar_uncropped",
     // "avatar_larger", dst) di array thumbnails milik objek channel.
-    function pickAvatar(data) {
+    //
+    // allowVideoLikeObject: TikTok itu kasus khusus — dari source code
+    // extractor resminya, avatar creator DIAMBIL dengan cara resolve video
+    // PERTAMA di profil itu (videos[0].author.avatar_larger), lalu hasilnya
+    // dipetakan ke field "thumbnail" level-root. Artinya buat TikTok, objek
+    // hasil resolve 1 video BISA jadi sumber avatar yang valid meskipun
+    // "keliatan" kayak objek video individual (gak ada _type playlist atau
+    // entries) — beda dari platform lain yang biasanya avatar cuma valid
+    // kalau objeknya jelas-jelas level-channel.
+    function pickAvatar(data, { allowVideoLikeObject = false } = {}) {
       const thumbs = data.thumbnails || [];
       const tagged = thumbs.find(t => t.id && /avatar/i.test(t.id));
       if (tagged) return tagged.url;
-      if (!looksLikeChannelObject(data) || !thumbs.length) return null;
+      if (!thumbs.length) return null;
+      if (!allowVideoLikeObject && !looksLikeChannelObject(data)) return null;
 
       const fallbackUrl = thumbs.at(-1).url;
       // Sanity check: kalau thumbnail "channel" ini persis sama dengan
@@ -1157,8 +1167,19 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
       );
       if (firstEntryThumb && firstEntryThumb === fallbackUrl) return null;
 
+      // Sanity check kedua, khusus mode allowVideoLikeObject: kalau
+      // thumbnail yang mau dipakai ternyata SAMA PERSIS dengan thumbnail
+      // video utama objek itu sendiri (data.thumbnail), itu juga tanda kuat
+      // ini cover video, bukan avatar — video biasanya nunjuk thumbnail
+      // videonya sendiri sebagai data.thumbnail (elemen terakhir array).
+      if (allowVideoLikeObject && data.thumbnail && data.thumbnail === fallbackUrl && thumbs.length <= 1) {
+        return null;
+      }
+
       return fallbackUrl;
     }
+
+    const isTikTok = /tiktok\.com/i.test(url);
 
     let data = await tryFetchProfile('0');
     let avatar = pickAvatar(data);
@@ -1166,17 +1187,23 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
 
     // Retry pakai 1 item kalau avatar belum ketemu (dengan 0 item beberapa
     // extractor emang gak bisa narik avatar sama sekali — perlu minimal 1
-    // video di-resolve). Nama channel biasanya udah ketemu dari percobaan
-    // pertama, jadi syarat retry cukup fokus ke avatar aja.
+    // video di-resolve). TikTok SELALU butuh retry ini karena avatar-nya
+    // emang cuma bisa didapet dari resolve video pertama (lihat penjelasan
+    // di pickAvatar), jadi allowVideoLikeObject di-set true khusus platform
+    // ini biar avatar-nya gak keblokir validasi "harus keliatan channel".
     if (!avatar) {
       const retryData = await tryFetchProfile('1');
-      const retryAvatar = pickAvatar(retryData);
-      if (retryAvatar) avatar = retryAvatar;
-      if (!name) name = retryData.channel || retryData.uploader || retryData.title || null;
-      // Field non-avatar (followers, bio, dst) pakai data mana aja yang
-      // paling lengkap — kalau percobaan kedua ternyata objeknya lebih
-      // "channel-like", pakai itu sebagai sumber utama field lainnya.
-      if (looksLikeChannelObject(retryData) && !looksLikeChannelObject(data)) data = retryData;
+      const retryAvatar = pickAvatar(retryData, { allowVideoLikeObject: isTikTok });
+      if (retryAvatar) {
+        avatar = retryAvatar;
+        // retryData terbukti punya avatar valid — pakai itu juga sebagai
+        // sumber field lain (followers/bio/name) kalau field itu kosong di
+        // data awal, karena kemungkinan besar retryData lebih lengkap.
+        if (!name) name = retryData.channel || retryData.uploader || retryData.title || null;
+        if (!data.channel_follower_count && retryData.channel_follower_count) data = retryData;
+      } else if (!name) {
+        name = retryData.channel || retryData.uploader || retryData.title || null;
+      }
     }
 
     const totalVideos = Number.isFinite(data.playlist_count) ? data.playlist_count
