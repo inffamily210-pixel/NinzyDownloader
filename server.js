@@ -282,6 +282,12 @@ function friendlyError(rawMessage) {
   if (msg.includes('geo') || msg.includes('country')) return 'Video ini dibatasi wilayah (geo-blocked).';
   if (msg.includes('unsupported url') || msg.includes('is not a valid url')) return 'Link tidak dikenali. Pastikan link TikTok/YouTube/Instagram/Facebook valid.';
   if (msg.includes('sign in') || msg.includes('confirm you')) return 'Video butuh verifikasi akun, tidak bisa diunduh otomatis.';
+  // Post foto/slideshow TikTok/IG gak punya format video sama sekali (cuma
+  // audio + gambar terpisah), jadi kalau user coba download pakai pilihan
+  // kualitas video, yt-dlp bakal bilang "Requested format is not available".
+  if (msg.includes('requested format is not available') || msg.includes('no video formats')) {
+    return 'Postingan ini kemungkinan foto/slideshow, bukan video — coba cek ulang link-nya lalu pakai opsi "Download Semua Foto" atau "Jadikan 1 Video".';
+  }
   return 'Gagal memproses video. Coba link lain atau ulangi beberapa saat lagi.';
 }
 
@@ -355,8 +361,16 @@ app.post('/api/info', rateLimit, async (req, res) => {
   }
 
   try {
+    // --no-playlist cuma perlu buat YouTube (biar link video-di-dalam-
+    // playlist gak ke-treat sebagai playlist penuh). Untuk TikTok/Instagram,
+    // JANGAN pasang --no-playlist: post foto/slideshow di platform itu
+    // di-extract yt-dlp lewat mode "playlist" gambar — kalau dipaksa
+    // --no-playlist, entries fotonya gak pernah muncul dan post itu malah
+    // salah kebaca sebagai video biasa (yang ujungnya gagal pas didownload
+    // karena isinya gambar diam, bukan video).
+    const noPlaylistArg = /youtube\.com|youtu\.be/i.test(url) ? ['--no-playlist'] : [];
     const { stdout } = await runYtDlp([
-      '-j', '--no-warnings', '--no-playlist', '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
+      '-j', '--no-warnings', ...noPlaylistArg, '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
     ], { timeoutMs: 45000 });
 
     const firstLine = stdout.split('\n').find(l => l.trim().startsWith('{'));
@@ -365,7 +379,7 @@ app.post('/api/info', rateLimit, async (req, res) => {
 
     // Post foto/slideshow (umum di TikTok, kadang IG) muncul sebagai
     // "entries" berisi gambar-gambar, bukan satu video biasa.
-    const isPhotoSet = Array.isArray(info.entries) && info.entries.length > 0;
+    let isPhotoSet = Array.isArray(info.entries) && info.entries.length > 0;
 
     const maxHeight = Math.max(
       0,
@@ -374,10 +388,23 @@ app.post('/api/info', rateLimit, async (req, res) => {
         .filter(h => Number.isFinite(h)))
     );
 
+    // Pengaman tambahan: kalau bukan photo-set (gak ada entries) TAPI juga
+    // gak ada satupun format yang punya video track (semua vcodec='none'),
+    // ini hampir pasti post foto yang gagal kebaca lewat entries -- jangan
+    // tawarin opsi kualitas video yang pasti gagal, treat aja sebagai foto.
+    const hasAnyVideoFormat = (info.formats || []).some(f => f.vcodec && f.vcodec !== 'none');
+    if (!isPhotoSet && !hasAnyVideoFormat && !isPlaylistUrl) {
+      isPhotoSet = true;
+    }
+
     let qualities;
     let subtitleLanguages = [];
     if (isPhotoSet) {
-      qualities = [{ label: `📸 Download Semua Foto (${info.entries.length}) — ZIP`, value: 'photos' }];
+      const photoCount = (info.entries && info.entries.length) || 1;
+      qualities = [
+        { label: `📸 Download Semua Foto (${photoCount}) — ZIP`, value: 'photos' },
+        { label: '🎞️ Jadikan 1 Video (Slideshow + Musik)', value: 'photos_video' }
+      ];
     } else {
       qualities = [{ label: '🎬 Kualitas Terbaik', value: 'best' }];
       if (maxHeight >= 1080) qualities.push({ label: '1080p', value: '1080' });
@@ -414,6 +441,26 @@ app.post('/api/info', rateLimit, async (req, res) => {
     const hasThumbnail = !!(info.thumbnail || (info.thumbnails && info.thumbnails.length));
     if (hasThumbnail) qualities.push({ label: '🖼️ Thumbnail (Gambar)', value: 'thumbnail' });
 
+    // Musik latar (TikTok/IG/YT Shorts sering nempelin metadata lagu resmi
+    // di sini) — kalau ketemu, tawarin download lagunya doang secara
+    // terpisah dari video utuhnya.
+    const musicTitle = info.track || (info.alt_title && info.alt_title !== info.title ? info.alt_title : null);
+    const musicArtist = info.artist || info.creator || null;
+    const hasMusic = !isPhotoSet && !!(musicTitle || musicArtist);
+    if (hasMusic) {
+      qualities.push({
+        label: `🎶 Download Lagu Ini — ${[musicTitle, musicArtist].filter(Boolean).join(' · ').slice(0, 40)}`,
+        value: 'music'
+      });
+    }
+
+    // Live/upcoming: kasih tau di awal biar user gak nunggu proses gagal
+    // percuma — video live yang masih berlangsung gak selalu bisa langsung
+    // di-download utuh, dan yang "upcoming" jelas belum ada filenya.
+    const liveStatus = info.live_status || null; // is_live | is_upcoming | was_live | post_live | not_live
+    const isLive = liveStatus === 'is_live' || liveStatus === 'post_live';
+    const isUpcoming = liveStatus === 'is_upcoming';
+
     res.json({
       success: true,
       title: info.title || (isPhotoSet ? 'Postingan Foto' : 'Video'),
@@ -421,14 +468,21 @@ app.post('/api/info', rateLimit, async (req, res) => {
       duration: info.duration || 0,
       uploader: info.uploader || info.channel || '',
       uploaderUrl: info.uploader_url || info.channel_url || null,
+      isVerified: !!(info.channel_is_verified || info.uploader_verified || info.is_verified || info.artist_verified),
       platform: detectPlatform(url),
       isPhotoSet,
-      photoCount: isPhotoSet ? info.entries.length : 0,
+      photoCount: isPhotoSet ? ((info.entries && info.entries.length) || 1) : 0,
       viewCount: formatCount(info.view_count),
       likeCount: formatCount(info.like_count),
       commentCount: formatCount(info.comment_count),
+      repostCount: formatCount(info.repost_count),
       uploadDate: formatUploadDate(info.upload_date),
       description: (info.description || '').slice(0, 3000),
+      ageRestricted: !!(info.age_limit && info.age_limit >= 18),
+      isLive,
+      isUpcoming,
+      concurrentViewers: isLive ? formatCount(info.concurrent_view_count) : null,
+      music: hasMusic ? { title: musicTitle, artist: musicArtist, album: info.album || null } : null,
       subtitleLanguages,
       qualities
     });
@@ -445,7 +499,7 @@ app.get('/api/download', rateLimit, async (req, res) => {
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
   }
-  if (quality !== 'photos' && quality !== 'subtitle' && quality !== 'thumbnail' && !QUALITY_FORMATS[quality]) {
+  if (quality !== 'photos' && quality !== 'photos_video' && quality !== 'subtitle' && quality !== 'thumbnail' && quality !== 'music' && !QUALITY_FORMATS[quality]) {
     return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid.' });
   }
 
@@ -453,19 +507,21 @@ app.get('/api/download', rateLimit, async (req, res) => {
   // foto/subtitle/thumbnail yang gak punya konsep "durasi".
   const ts = Number(trimStart), te = Number(trimEnd);
   const hasTrim = Number.isFinite(ts) && Number.isFinite(te) && ts >= 0 && te > ts &&
-                  !['photos', 'subtitle', 'thumbnail', 'preview'].includes(quality);
+                  !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview'].includes(quality);
 
   // SponsorBlock: cuma masuk akal buat YouTube (data komunitasnya cuma ada
   // di sana), dan cuma buat video/audio biasa sama kayak trim.
   const hasSponsorSkip = skipSponsor === '1' && /youtube\.com|youtu\.be/i.test(url) &&
-                         !['photos', 'subtitle', 'thumbnail', 'preview'].includes(quality);
+                         !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview'].includes(quality);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ninzydl-'));
   const isPhotos = quality === 'photos';
+  const isPhotosVideo = quality === 'photos_video';
   const isSubtitle = quality === 'subtitle';
   const isThumbnail = quality === 'thumbnail';
   const isPreview = quality === 'preview';
-  const isAudio = quality === 'audio' || quality === 'audio_opus';
+  const isMusic = quality === 'music';
+  const isAudio = quality === 'audio' || quality === 'audio_opus' || isMusic;
   const audioFormat = quality === 'audio_opus' ? 'opus' : 'mp3';
 
   const args = [
@@ -473,10 +529,14 @@ app.get('/api/download', rateLimit, async (req, res) => {
     '--socket-timeout', '20'
   ];
 
-  if (isPhotos) {
+  if (isPhotos || isPhotosVideo) {
     // Slideshow foto: ambil SEMUA gambar dalam post ini (bukan playlist
-    // eksternal), lalu nanti di-zip jadi satu file.
+    // eksternal). Buat photos_video, kita juga butuh audio latarnya biar
+    // bisa digabung jadi 1 video utuh.
     args.push('--yes-playlist', '-o', path.join(tmpDir, '%(playlist_index|1)s.%(ext)s'));
+    if (isPhotosVideo) {
+      args.push('--write-thumbnail'); // fallback kalau audio gak ke-extract terpisah
+    }
   } else if (isThumbnail) {
     args.push(
       '--no-playlist', '--skip-download',
@@ -498,7 +558,8 @@ app.get('/api/download', rateLimit, async (req, res) => {
     );
   } else if (isAudio) {
     args.push('--no-playlist', '-o', path.join(tmpDir, '%(id)s.%(ext)s'));
-    args.push('-x', '--audio-format', audioFormat, '-f', QUALITY_FORMATS[quality]);
+    args.push('-x', '--audio-format', audioFormat, '-f', QUALITY_FORMATS[quality] || QUALITY_FORMATS.audio);
+    if (isMusic) args.push('--embed-thumbnail', '--embed-metadata'); // biar file lagu punya cover art + judul/artis pas dibuka di player musik
     if (hasSponsorSkip) args.push('--sponsorblock-remove', 'sponsor,selfpromo,interaction,intro,outro');
     if (hasTrim) args.push('--download-sections', `*${ts}-${te}`);
     if (hasTrim || hasSponsorSkip) args.push('--force-keyframes-at-cuts');
@@ -516,7 +577,57 @@ app.get('/api/download', rateLimit, async (req, res) => {
   };
 
   try {
-    await runYtDlp(args, isPhotos ? { timeoutMs: PROCESS_TIMEOUT_MS } : undefined);
+    await runYtDlp(args, (isPhotos || isPhotosVideo) ? { timeoutMs: PROCESS_TIMEOUT_MS } : undefined);
+
+    if (isPhotosVideo) {
+      const allFiles = fs.readdirSync(tmpDir).filter(f => !f.startsWith('.'));
+      const imageFiles = allFiles
+        .filter(f => /\.(jpe?g|png|webp)$/i.test(f))
+        .sort((a, b) => (parseInt(a) || 0) - (parseInt(b) || 0));
+      if (!imageFiles.length) throw new Error('Foto tidak ditemukan di post ini.');
+
+      // Cari file audio (musik latar TikTok/IG) kalau ada — yt-dlp kadang
+      // narik audio slideshow sebagai file audio terpisah (m4a/mp3/webm).
+      const audioFile = allFiles.find(f => /\.(m4a|mp3|opus|webm|aac)$/i.test(f) && !imageFiles.includes(f));
+
+      const DURATION_PER_PHOTO = 2.5; // detik per foto kalau gak ada audio buat nentuin panjang video
+      const listPath = path.join(tmpDir, 'slideshow.txt');
+      const listContent = imageFiles.map(f =>
+        `file '${path.join(tmpDir, f).replace(/'/g, "'\\''")}'\nduration ${DURATION_PER_PHOTO}`
+      ).join('\n') + `\nfile '${path.join(tmpDir, imageFiles[imageFiles.length - 1]).replace(/'/g, "'\\''")}'`;
+      fs.writeFileSync(listPath, listContent);
+
+      const outPath = path.join(tmpDir, 'slideshow_output.mp4');
+      const ffmpegArgs = [
+        '-y', '-f', 'concat', '-safe', '0', '-i', listPath
+      ];
+      if (audioFile) ffmpegArgs.push('-i', path.join(tmpDir, audioFile));
+      ffmpegArgs.push(
+        '-vf', "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+        '-c:v', 'libx264', '-r', '30'
+      );
+      if (audioFile) ffmpegArgs.push('-c:a', 'aac', '-shortest');
+      ffmpegArgs.push(outPath);
+
+      await new Promise((resolve, reject) => {
+        const ff = spawn('ffmpeg', ffmpegArgs, { windowsHide: true });
+        let stderr = '';
+        ff.stderr.on('data', d => { stderr += d.toString(); });
+        ff.on('error', reject);
+        ff.on('close', code => code === 0 ? resolve() : reject(new Error('Gagal menggabungkan foto jadi video: ' + stderr.trim().split('\n').pop())));
+      });
+
+      const stat = fs.statSync(outPath);
+      const safeName = `ninzy_slideshow_${crypto.randomBytes(3).toString('hex')}.mp4`;
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      const stream = fs.createReadStream(outPath);
+      stream.pipe(res);
+      stream.on('close', cleanup);
+      stream.on('error', () => { cleanup(); if (!res.headersSent) res.status(500).end(); });
+      return;
+    }
 
     if (isPhotos) {
       const files = fs.readdirSync(tmpDir).filter(f => !f.startsWith('.'));
@@ -601,7 +712,7 @@ app.get('/api/download', rateLimit, async (req, res) => {
     const ext = path.extname(files[0]).replace('.', '') || (isAudio ? audioFormat : 'mp4');
     const stat = fs.statSync(filePath);
 
-    const safeName = `ninzy_${crypto.randomBytes(3).toString('hex')}.${ext}`;
+    const safeName = `ninzy_${isMusic ? 'lagu' : ''}${crypto.randomBytes(3).toString('hex')}.${ext}`;
     const contentType = isAudio
       ? (audioFormat === 'opus' ? 'audio/opus' : 'audio/mpeg')
       : (ext === 'webm' ? 'video/webm' : 'video/mp4');
@@ -627,25 +738,11 @@ app.get('/api/download', rateLimit, async (req, res) => {
 
 const BATCH_MAX_URLS = 5;
 
-app.post('/api/batch-download', batchRateLimit, async (req, res) => {
-  const { urls, quality = 'best' } = req.body || {};
-  const cleanUrls = Array.isArray(urls) ? urls.map(u => (u || '').trim()).filter(Boolean) : [];
-
-  if (!cleanUrls.length) {
-    return res.status(400).json({ success: false, error: 'Daftar link kosong.' });
-  }
-  if (cleanUrls.length > BATCH_MAX_URLS) {
-    return res.status(400).json({ success: false, error: `Maksimal ${BATCH_MAX_URLS} link per batch.` });
-  }
-  for (const u of cleanUrls) {
-    if (!isSupportedUrl(u)) {
-      return res.status(400).json({ success: false, error: `Link tidak didukung: ${u}` });
-    }
-  }
-  if (!['best', '1080', '720', '480', 'audio', 'audio_opus'].includes(quality)) {
-    return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid untuk batch.' });
-  }
-
+// Logika inti download banyak link sekaligus lalu dibundling jadi ZIP.
+// Diekstrak jadi fungsi terpisah supaya bisa dipakai baik dari
+// /api/batch-download (link manual dari user) maupun dari
+// /api/creator-download-all (link hasil scan profil/channel).
+async function runBatchDownload(cleanUrls, quality, res) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ninzybatch-'));
   const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }, () => {});
   const isAudio = quality === 'audio' || quality === 'audio_opus';
@@ -718,6 +815,28 @@ app.post('/api/batch-download', batchRateLimit, async (req, res) => {
       res.end();
     }
   }
+}
+
+app.post('/api/batch-download', batchRateLimit, async (req, res) => {
+  const { urls, quality = 'best' } = req.body || {};
+  const cleanUrls = Array.isArray(urls) ? urls.map(u => (u || '').trim()).filter(Boolean) : [];
+
+  if (!cleanUrls.length) {
+    return res.status(400).json({ success: false, error: 'Daftar link kosong.' });
+  }
+  if (cleanUrls.length > BATCH_MAX_URLS) {
+    return res.status(400).json({ success: false, error: `Maksimal ${BATCH_MAX_URLS} link per batch.` });
+  }
+  for (const u of cleanUrls) {
+    if (!isSupportedUrl(u)) {
+      return res.status(400).json({ success: false, error: `Link tidak didukung: ${u}` });
+    }
+  }
+  if (!['best', '1080', '720', '480', 'audio', 'audio_opus'].includes(quality)) {
+    return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid untuk batch.' });
+  }
+
+  await runBatchDownload(cleanUrls, quality, res);
 });
 
 app.post('/api/admin/verify-pin', adminPinRateLimit, (req, res) => {
@@ -999,16 +1118,130 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
     const data = JSON.parse(stdout.split('\n').find(l => l.trim().startsWith('{')) || '{}');
     const avatar = (data.thumbnails && data.thumbnails.length) ? data.thumbnails.at(-1).url : (data.thumbnail || null);
 
+    // "Total video" biasanya keliatan dari jumlah entries hasil flat-playlist
+    // (walau di sini kita batasi 0 entri buat kecepatan, beberapa extractor
+    // tetep ngasih playlist_count di root objek).
+    const totalVideos = Number.isFinite(data.playlist_count) ? data.playlist_count
+      : (Number.isFinite(data.n_entries) ? data.n_entries : null);
+
     res.json({
       success: true,
       name: data.channel || data.uploader || data.title || null,
+      handle: data.uploader_id || data.channel_id || null,
       avatar,
       followers: formatCount(data.channel_follower_count),
       bio: data.description ? data.description.slice(0, 600) : null,
+      isVerified: !!(data.channel_is_verified || data.uploader_verified || data.is_verified || data.artist_verified),
+      totalVideos: totalVideos !== null ? formatCount(totalVideos) : null,
+      externalLinks: Array.isArray(data.webpage_url_domain) ? null : (data.channel_url || data.uploader_url || null),
       url
     });
   } catch (e) {
     res.status(404).json({ success: false, error: 'Info profil gak tersedia buat platform ini.' });
+  }
+});
+
+// Video-video lain dari creator yang sama ("video terkait" ATAU, dengan
+// limit lebih besar + mode all=1, "download semua dari akun ini"). Sama
+// seperti creator-profile, ini "mengunjungi" halaman channel/profil (bukan
+// halaman video tunggal), pakai --flat-playlist biar cepat (gak buka tiap
+// video satu-satu).
+const CREATOR_VIDEOS_CAP = 8; // mode "video terkait" (ringkas)
+const CREATOR_VIDEOS_ALL_CAP = 30; // mode "download semua" (dibatasi biar server gratisan gak keberatan)
+app.get('/api/creator-videos', rateLimit, async (req, res) => {
+  const { url, all } = req.query;
+  if (!url || typeof url !== 'string' || !isSupportedUrl(url)) {
+    return res.status(400).json({ success: false, error: 'URL profil tidak valid.' });
+  }
+  const isAllMode = all === '1';
+  const cap = isAllMode ? CREATOR_VIDEOS_ALL_CAP : CREATOR_VIDEOS_CAP;
+  try {
+    const { stdout } = await runYtDlp([
+      '--flat-playlist', '-j', '--no-warnings', '--playlist-end', String(cap),
+      '--socket-timeout', isAllMode ? '25' : '15', ...cookieArgs(), ...ytClientArgs(url), url
+    ], { timeoutMs: isAllMode ? 60000 : 30000 });
+
+    const entries = stdout.split('\n')
+      .filter(l => l.trim().startsWith('{'))
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean)
+      // Beberapa extractor nyelipin entry non-video (misal info channel itu
+      // sendiri) di baris pertama flat-playlist — buang yang gak punya id.
+      .filter(e => e.id);
+
+    if (!entries.length) {
+      return res.status(404).json({ success: false, error: 'Gak ada video lain yang ketemu dari creator ini.' });
+    }
+
+    const platform = detectPlatform(url);
+    // flat-playlist ngasih "url"/"webpage_url" yang formatnya beda-beda tiap
+    // extractor (kadang link penuh, kadang cuma id) — fallback ke link
+    // YouTube standar kalau memang platform-nya YouTube dan yang lain kosong.
+    const resolveVideoUrl = (e) => {
+      if (e.webpage_url) return e.webpage_url;
+      if (e.url && /^https?:\/\//.test(e.url)) return e.url;
+      if (platform === 'YouTube' && e.id) return `https://www.youtube.com/watch?v=${e.id}`;
+      return null;
+    };
+
+    res.json({
+      success: true,
+      platform,
+      capped: entries.length >= cap,
+      videos: entries.slice(0, cap).map(e => ({
+        id: e.id,
+        title: e.title || 'Video',
+        thumbnail: e.thumbnails && e.thumbnails.length ? e.thumbnails.at(-1).url : (e.thumbnail || ''),
+        duration: e.duration || 0,
+        viewCount: formatCount(e.view_count),
+        url: resolveVideoUrl(e)
+      })).filter(v => v.url)
+    });
+  } catch (e) {
+    res.status(404).json({ success: false, error: 'Video terkait gak tersedia buat platform ini.' });
+  }
+});
+
+// Download semua video dari 1 akun sekaligus, dibundling jadi ZIP. Ini versi
+// "berat" dari batch-download (mirip alurnya) tapi sumber daftar link-nya
+// dari profil/channel, bukan dari input manual user.
+const CREATOR_DOWNLOAD_ALL_MAX = 15; // dibatasi lebih ketat dari list (30) karena tiap video beneran di-download, bukan cuma dibaca metadatanya
+app.post('/api/creator-download-all', batchRateLimit, async (req, res) => {
+  const { profileUrl, quality = 'best' } = req.body || {};
+  if (!profileUrl || typeof profileUrl !== 'string' || !isSupportedUrl(profileUrl)) {
+    return res.status(400).json({ success: false, error: 'URL profil tidak valid.' });
+  }
+  if (!['best', '1080', '720', '480', 'audio', 'audio_opus'].includes(quality)) {
+    return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid.' });
+  }
+  try {
+    const { stdout } = await runYtDlp([
+      '--flat-playlist', '-j', '--no-warnings', '--playlist-end', String(CREATOR_DOWNLOAD_ALL_MAX),
+      '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(profileUrl), profileUrl
+    ], { timeoutMs: 40000 });
+
+    const platform = detectPlatform(profileUrl);
+    const entries = stdout.split('\n')
+      .filter(l => l.trim().startsWith('{'))
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(e => e && e.id);
+
+    const urls = entries.map(e => {
+      if (e.webpage_url) return e.webpage_url;
+      if (e.url && /^https?:\/\//.test(e.url)) return e.url;
+      if (platform === 'YouTube') return `https://www.youtube.com/watch?v=${e.id}`;
+      return null;
+    }).filter(Boolean).slice(0, CREATOR_DOWNLOAD_ALL_MAX);
+
+    if (!urls.length) {
+      return res.status(404).json({ success: false, error: 'Gak ada video yang ketemu buat di-download dari akun ini.' });
+    }
+
+    // Reuse logika batch-download yang udah ada (download tiap URL satu-satu,
+    // bundle jadi ZIP) supaya gak duplikasi kode penanganan proses/cleanup.
+    await runBatchDownload(urls, quality, res);
+  } catch (e) {
+    res.status(500).json({ success: false, error: friendlyError(e.message) });
   }
 });
 

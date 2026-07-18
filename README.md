@@ -43,10 +43,24 @@ manggil backend ini.
 ## Endpoint
 
 - `GET  /api/health` — cek server & versi yt-dlp
-- `POST /api/info` — body `{ "url": "..." }`, balikin judul/thumbnail/durasi
-  + daftar pilihan kualitas
-- `GET  /api/download?url=...&quality=best|1080|720|480|audio` — stream file
-  hasil download langsung ke browser
+- `POST /api/info` — body `{ "url": "..." }`, balikin judul/thumbnail/durasi,
+  statistik (view/like/komentar/repost), tanggal upload, status live/
+  upcoming, status verifikasi akun pembuat, info musik latar (kalau
+  terdeteksi), + daftar pilihan kualitas (termasuk `music` buat download
+  lagunya doang, dan `photos_video` buat slideshow foto → 1 video)
+- `GET  /api/download?url=...&quality=...` — stream file hasil download.
+  Kualitas didukung: `best|1080|720|480|audio|audio_opus|music|photos|
+  photos_video|thumbnail|subtitle`
+- `GET  /api/creator-profile?url=...` — profil pembuat video (nama, avatar,
+  followers, bio, status verifikasi, total video). `url` di sini adalah
+  link profil/channel, bukan link video
+- `GET  /api/creator-videos?url=...&all=1` — daftar video dari creator yang
+  sama. Tanpa `all=1`: maks 8 video (buat "video terkait"). Dengan `all=1`:
+  maks 30 video (buat mode "lihat semua video akun ini")
+- `POST /api/creator-download-all` — body `{ "profileUrl": "...", "quality":
+  "best" }`, download sampai 15 video terbaru dari 1 akun sekaligus,
+  dibundling jadi ZIP (sama seperti batch-download tapi sumbernya dari scan
+  profil, bukan link manual)
 
 ## Catatan
 
