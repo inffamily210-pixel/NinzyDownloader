@@ -73,6 +73,132 @@ app.use(cors({
 
 const PORT = process.env.PORT || 3000;
 
+// Config downloader — toggle nyala/mati, platform aktif, pesan maintenance.
+// Disimpan di Firestore (adminSystem/downloaderConfig) biar kepakai
+// langsung sama frontend Vercel DAN dicek di backend ini sendiri sebelum
+// proses download jalan — bukan cuma dicek di frontend (yang bisa di-
+// bypass kalau orang tau endpoint API-nya langsung).
+const DOWNLOADER_CONFIG_DOC = 'downloaderConfig';
+const DEFAULT_DOWNLOADER_CONFIG = {
+  enabled: true,
+  maintenanceMessage: null, // null = gak ada pesan, string = tampilin banner ini di card downloader
+  platforms: {
+    TikTok: true, YouTube: true, Instagram: true, Facebook: true,
+    'Twitter/X': true, Reddit: true, SoundCloud: true, Twitch: true
+  }
+};
+
+// Cache ringan (60 detik) biar gak query Firestore di SETIAP request
+// download — toggle admin emang gak butuh reaktif dalam hitungan
+// milidetik, delay maks 1 menit buat efeknya kepakai itu wajar.
+let downloaderConfigCache = null;
+let downloaderConfigCacheAt = 0;
+async function getDownloaderConfig() {
+  if (!fsDb) return DEFAULT_DOWNLOADER_CONFIG;
+  if (downloaderConfigCache && Date.now() - downloaderConfigCacheAt < 60_000) return downloaderConfigCache;
+  try {
+    const doc = await fsDb.collection('adminSystem').doc(DOWNLOADER_CONFIG_DOC).get();
+    downloaderConfigCache = doc.exists ? { ...DEFAULT_DOWNLOADER_CONFIG, ...doc.data() } : DEFAULT_DOWNLOADER_CONFIG;
+    downloaderConfigCacheAt = Date.now();
+    return downloaderConfigCache;
+  } catch (e) {
+    // Fail-open: Firestore bermasalah gak boleh diam-diam matiin downloader
+    // buat semua orang.
+    return DEFAULT_DOWNLOADER_CONFIG;
+  }
+}
+
+// Dipanggil di awal /api/info dan /api/download — return null kalau boleh
+// lanjut, atau { statusCode, error } kalau harus ditolak.
+async function checkDownloaderEnabled(url) {
+  const config = await getDownloaderConfig();
+  if (config.enabled === false) {
+    return { statusCode: 503, error: config.maintenanceMessage || 'Downloader lagi dimatikan sementara oleh admin.' };
+  }
+  const platform = detectPlatformForLog(url);
+  if (platform && config.platforms && config.platforms[platform] === false) {
+    return { statusCode: 503, error: `Platform ${platform} lagi dinonaktifkan sementara. Coba platform lain dulu ya.` };
+  }
+  return null;
+}
+
+// ── Request logging (buat admin panel: live log, statistik, monitoring) ──
+// Dua lapis:
+// 1. In-memory ring buffer — cepat, gak nunggu network Firestore, dipakai
+//    buat "live log" & angka real-time di admin panel. Ilang kalau server
+//    restart (wajar, ini bukan sumber kebenaran jangka panjang).
+// 2. Firestore — ringkasan per-request ditulis ke sana (fire-and-forget,
+//    gak nge-block response ke user), jadi histori tetep ada meski server
+//    restart, buat statistik harian/mingguan di panel admin.
+const LOG_BUFFER_MAX = 500;
+const requestLogBuffer = []; // array of { id, ts, method, path, platform, quality, statusCode, durationMs, bytesOut, error }
+
+function logRequest(entry) {
+  const record = { id: crypto.randomUUID(), ts: Date.now(), ...entry };
+  requestLogBuffer.push(record);
+  if (requestLogBuffer.length > LOG_BUFFER_MAX) requestLogBuffer.shift();
+
+  // Tulis ke Firestore tanpa nunggu (fire-and-forget) — kalau gagal (misal
+  // Firebase belum di-setup), gak boleh sampai ganggu response ke user.
+  if (fsDb) {
+    fsDb.collection('downloaderLogs').add({
+      ...entry,
+      ts: admin.firestore.FieldValue.serverTimestamp()
+    }).catch(() => { /* logging gak boleh bikin request utama gagal */ });
+  }
+  return record;
+}
+
+// Coba tebak platform dari URL query/body buat keperluan statistik —
+// dipanggil di middleware sebelum handler tau URL-nya (jadi duplikasi
+// ringan dari detectPlatform, didefinisikan lebih awal di sini).
+function detectPlatformForLog(str) {
+  if (!str || typeof str !== 'string') return null;
+  if (/tiktok\.com/i.test(str)) return 'TikTok';
+  if (/youtube\.com|youtu\.be/i.test(str)) return 'YouTube';
+  if (/instagram\.com/i.test(str)) return 'Instagram';
+  if (/facebook\.com|fb\.watch/i.test(str)) return 'Facebook';
+  if (/twitter\.com|x\.com/i.test(str)) return 'Twitter/X';
+  if (/reddit\.com/i.test(str)) return 'Reddit';
+  if (/soundcloud\.com/i.test(str)) return 'SoundCloud';
+  if (/twitch\.tv/i.test(str)) return 'Twitch';
+  return null;
+}
+
+// Middleware: nyatet SETIAP request yang lewat /api/* — durasi, status code,
+// ukuran response (bandwidth), platform yang di-hit. Dipasang sebelum semua
+// route lain biar kecatet semua tanpa perlu diulang manual di tiap handler.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  const startedAt = Date.now();
+  let bytesOut = 0;
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+  res.write = (chunk, ...args) => {
+    if (chunk) bytesOut += Buffer.byteLength(chunk);
+    return originalWrite(chunk, ...args);
+  };
+  res.end = (chunk, ...args) => {
+    if (chunk) bytesOut += Buffer.byteLength(chunk);
+    return originalEnd(chunk, ...args);
+  };
+
+  res.on('finish', () => {
+    const urlGuess = (req.query && req.query.url) || (req.body && req.body.url) || (req.body && req.body.profileUrl) || null;
+    logRequest({
+      method: req.method,
+      path: req.path,
+      platform: detectPlatformForLog(urlGuess),
+      quality: (req.query && req.query.quality) || (req.body && req.body.quality) || null,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+      bytesOut,
+      ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || null
+    });
+  });
+  next();
+});
+
 // ── Admin PIN (server-side only, TIDAK PERNAH dikirim ke browser) ─────────
 // Set ini di Railway → Variables → ADMIN_PIN. Kalau gak diset, endpoint
 // verifikasi PIN otomatis nonaktif (return error, bukan lolos gratis).
@@ -364,6 +490,31 @@ const QUALITY_FORMATS = {
 // Waktu proses ini mulai jalan — dipakai buat hitung uptime di /api/health.
 const SERVER_START_TIME = Date.now();
 
+// Auto-cleanup file sementara SAAT STARTUP — cleanup normal udah ada di tiap
+// endpoint (fs.rm setelah stream selesai/gagal, lihat fungsi cleanup() di
+// /api/download dan runBatchDownload), tapi itu gak kepanggil kalau
+// container mati mendadak (crash/OOM/restart paksa) SEBELUM request selesai.
+// Ini jaring pengaman tambahan: bersihin folder tmp sisa dari proses
+// sebelumnya begitu server baru nyala, biar disk gak numpuk pelan-pelan
+// tiap kali ada crash yang gak sempet cleanup sendiri.
+(function cleanupStaleTempFolders() {
+  try {
+    const tmpRoot = os.tmpdir();
+    const entries = fs.readdirSync(tmpRoot);
+    const stalePrefixes = ['ninzydl-', 'ninzybatch-'];
+    let cleaned = 0;
+    entries.forEach(name => {
+      if (stalePrefixes.some(p => name.startsWith(p))) {
+        fs.rm(path.join(tmpRoot, name), { recursive: true, force: true }, () => {});
+        cleaned++;
+      }
+    });
+    if (cleaned > 0) console.log(`[startup-cleanup] Membersihkan ${cleaned} folder sementara sisa dari sesi sebelumnya.`);
+  } catch (e) {
+    console.warn('[startup-cleanup] Gagal cek folder tmp:', e.message);
+  }
+})();
+
 app.get('/api/health', async (req, res) => {
   const requestReceivedAt = Date.now();
   try {
@@ -392,6 +543,11 @@ app.post('/api/info', rateLimit, async (req, res) => {
   }
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
+  }
+
+  const blockedCheck = await checkDownloaderEnabled(url);
+  if (blockedCheck) {
+    return res.status(blockedCheck.statusCode).json({ success: false, error: blockedCheck.error });
   }
 
   const PLAYLIST_CAP = 5; // dibatasi biar konsisten sama limit batch & gak berat di server gratisan
@@ -642,6 +798,10 @@ app.get('/api/download', rateLimit, async (req, res) => {
   }
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
+  }
+  const blockedCheck = await checkDownloaderEnabled(url);
+  if (blockedCheck) {
+    return res.status(blockedCheck.statusCode).json({ success: false, error: blockedCheck.error });
   }
   if (quality !== 'photos' && quality !== 'photos_video' && quality !== 'subtitle' && quality !== 'thumbnail' && quality !== 'music' && !QUALITY_FORMATS[quality]) {
     return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid.' });
@@ -1493,6 +1653,142 @@ app.post('/api/creator-download-all', batchRateLimit, async (req, res) => {
   }
 });
 
+// ── Admin: monitoring downloader ──────────────────────────────────────────
+
+// Live log — ambil dari in-memory buffer (cepat, real-time, gak nunggu
+// Firestore). limit dibatasi biar respons tetep ringan.
+app.get('/api/admin/downloader-logs', requireAdminToken, (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+  const logs = requestLogBuffer.slice(-limit).reverse(); // terbaru duluan
+  res.json({ success: true, logs, bufferSize: requestLogBuffer.length });
+});
+
+// Statistik — dihitung dari in-memory buffer (kejadian sejak server
+// terakhir nyala). JUJUR soal keterbatasan: ini BUKAN statistik permanen
+// dari awal waktu, karena buffer-nya kebatas 500 entri terakhir dan ke-reset
+// tiap restart server. Buat histori lebih panjang, data mentahnya juga
+// ketulis ke Firestore collection "downloaderLogs" (bisa diquery manual dari
+// Firebase Console kalau butuh rentang waktu lebih jauh).
+app.get('/api/admin/downloader-stats', requireAdminToken, (req, res) => {
+  const logs = requestLogBuffer;
+  const now = Date.now();
+  const last1h = logs.filter(l => now - l.ts < 60 * 60 * 1000);
+  const last24h = logs.filter(l => now - l.ts < 24 * 60 * 60 * 1000);
+
+  function summarize(subset) {
+    const total = subset.length;
+    const errors = subset.filter(l => l.statusCode >= 400).length;
+    const totalBytes = subset.reduce((sum, l) => sum + (l.bytesOut || 0), 0);
+    const avgDurationMs = total ? Math.round(subset.reduce((sum, l) => sum + (l.durationMs || 0), 0) / total) : 0;
+
+    const byPlatform = {};
+    subset.forEach(l => {
+      const p = l.platform || 'Lainnya';
+      byPlatform[p] = (byPlatform[p] || 0) + 1;
+    });
+
+    const byEndpoint = {};
+    subset.forEach(l => {
+      byEndpoint[l.path] = (byEndpoint[l.path] || 0) + 1;
+    });
+
+    // Grafik error: hitung error per-jam buat 24 jam terakhir (dipakai
+    // frontend buat gambar grafik batang sederhana).
+    return {
+      total, errors,
+      errorRate: total ? Math.round((errors / total) * 1000) / 10 : 0,
+      totalBytesOut: totalBytes,
+      avgDurationMs,
+      byPlatform,
+      byEndpoint
+    };
+  }
+
+  // Grafik error per jam (24 jam terakhir) — array 24 angka, index 0 = 23
+  // jam lalu, index 23 = jam sekarang.
+  const errorByHour = Array(24).fill(0);
+  const totalByHour = Array(24).fill(0);
+  last24h.forEach(l => {
+    const hoursAgo = Math.floor((now - l.ts) / (60 * 60 * 1000));
+    const idx = 23 - Math.min(23, hoursAgo);
+    totalByHour[idx]++;
+    if (l.statusCode >= 400) errorByHour[idx]++;
+  });
+
+  res.json({
+    success: true,
+    serverUptimeSeconds: Math.floor((Date.now() - SERVER_START_TIME) / 1000),
+    last1h: summarize(last1h),
+    last24h: summarize(last24h),
+    errorByHour,
+    totalByHour,
+    bufferedSince: logs.length ? new Date(logs[0].ts).toISOString() : null
+  });
+});
+
+// Config downloader — toggle nyala/mati, platform aktif, pesan maintenance.
+app.get('/api/admin/downloader-config', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  try {
+    // Baca langsung dari Firestore (bukan cache) buat endpoint admin —
+    // admin harus selalu liat data terbaru pas buka panel, cache 60 detik
+    // cuma buat jalur publik yang lebih sering di-hit.
+    const doc = await fsDb.collection('adminSystem').doc(DOWNLOADER_CONFIG_DOC).get();
+    res.json({ success: true, config: doc.exists ? { ...DEFAULT_DOWNLOADER_CONFIG, ...doc.data() } : DEFAULT_DOWNLOADER_CONFIG });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/admin/downloader-config', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  const { enabled, maintenanceMessage, platforms } = req.body || {};
+  const update = {};
+  if (typeof enabled === 'boolean') update.enabled = enabled;
+  if (maintenanceMessage === null || typeof maintenanceMessage === 'string') update.maintenanceMessage = maintenanceMessage || null;
+  if (platforms && typeof platforms === 'object') update.platforms = platforms;
+  if (!Object.keys(update).length) {
+    return res.status(400).json({ success: false, error: 'Gak ada perubahan yang dikirim.' });
+  }
+  try {
+    await fsDb.collection('adminSystem').doc(DOWNLOADER_CONFIG_DOC).set(update, { merge: true });
+    downloaderConfigCache = null; // invalidate cache biar perubahan langsung kepakai, gak nunggu 60 detik
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Endpoint PUBLIK (tanpa admin token) — dipanggil frontend Vercel buat tau
+// downloader lagi aktif apa nggak, dan platform mana yang dibatasi
+// sementara, SEBELUM user coba cek video. Read-only, gak expose data
+// sensitif, jadi aman diakses tanpa token.
+app.get('/api/downloader-config', rateLimit, async (req, res) => {
+  const config = await getDownloaderConfig();
+  res.json({ success: true, config });
+});
+
 app.listen(PORT, () => {
   console.log(`NinzyDownloader backend jalan di port ${PORT}`);
+
+  // ── Auto-restart kalau server nge-hang ──────────────────────────────────
+  // JUJUR soal apa ini dan apa BUKAN: ini BUKAN "restart worker individual
+  // tanpa nge-down-in website" — Railway di sini jalan 1 process tunggal,
+  // gak ada worker pool. Yang ini lakuin: self-check tiap beberapa menit
+  // sekali, dan kalau proses ini kedeteksi gak sehat (event loop macet
+  // total, ditandai dari watchdog gak sempet jalan tepat waktu), keluar
+  // dari process dengan exit code error. Railway otomatis restart container
+  // yang exit dengan error (restart policy bawaan platform) — jadi total
+  // downtime-nya cuma waktu Railway boot ulang container (~beberapa detik),
+  // BUKAN restart worker mulus tanpa downtime sama sekali.
+  const WATCHDOG_INTERVAL_MS = 60 * 1000;
+  const WATCHDOG_MAX_DELAY_MS = 20 * 1000; // kalau macet lebih dari ini, event loop dianggap hang
+  let lastTick = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const delay = now - lastTick - WATCHDOG_INTERVAL_MS;
+    lastTick = now;
+    if (delay > WATCHDOG_MAX_DELAY_MS) {
+      console.error(`[watchdog] Event loop macet ${delay}ms, keluar dari proses biar Railway restart container.`);
+      process.exit(1);
+    }
+  }, WATCHDOG_INTERVAL_MS);
 });
