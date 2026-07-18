@@ -1110,35 +1110,79 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
     return res.status(400).json({ success: false, error: 'URL profil tidak valid.' });
   }
   try {
-    // PENTING: TANPA --flat-playlist di sini. Flat-playlist emang cepat,
-    // tapi field thumbnail/avatar level-channel gak pernah ke-resolve dalam
-    // mode itu (limitation yt-dlp yang udah lama, lihat issue #4961/#9983) --
-    // hasilnya avatar profil selalu kosong walau request "berhasil". Jadi
-    // kita pakai mode normal tapi DIBATASI 1 item (--playlist-items 1) biar
-    // yt-dlp cuma perlu resolve 1 video buat dapetin info channel-nya,
-    // bukan buka semua video di channel itu (yang jelas jauh lebih lambat).
-    const { stdout } = await runYtDlp([
-      '--dump-single-json', '--playlist-items', '1',
-      '--no-warnings', '--socket-timeout', '15', ...cookieArgs(), ...ytClientArgs(url), url
-    ], { timeoutMs: 25000 });
+    // Field avatar/nama channel itu beda-beda letaknya tergantung gimana
+    // yt-dlp resolve URL profil (playlist-items 0 vs 1, tergantung versi &
+    // extractor platform). Daripada nebak satu cara yang "pasti benar",
+    // kita coba beberapa strategi dan VALIDASI hasilnya sebelum dipakai —
+    // supaya gak ketuker sama thumbnail video individual kayak yang
+    // sempet kejadian.
+    async function tryFetchProfile(playlistItems) {
+      const { stdout } = await runYtDlp([
+        '--dump-single-json', '--playlist-items', playlistItems,
+        '--no-warnings', '--socket-timeout', '15', ...cookieArgs(), ...ytClientArgs(url), url
+      ], { timeoutMs: 25000 });
+      return JSON.parse(stdout.split('\n').find(l => l.trim().startsWith('{')) || '{}');
+    }
 
-    const data = JSON.parse(stdout.split('\n').find(l => l.trim().startsWith('{')) || '{}');
-    const avatar = (data.thumbnails && data.thumbnails.length) ? data.thumbnails.at(-1).url : (data.thumbnail || null);
+    // "Objek video individual" dicirikan oleh _type "video" (atau kosong)
+    // DAN gak punya entries/playlist_count sama sekali. Objek channel/user
+    // ditandai _type "playlist"/"multi_video"/"url" ATAU punya
+    // entries/playlist_count, meskipun cuma 0-1 entri yang di-resolve.
+    function looksLikeChannelObject(data) {
+      if (!data || typeof data !== 'object') return false;
+      if (data._type && data._type !== 'video') return true;
+      if (Array.isArray(data.entries)) return true;
+      if (Number.isFinite(data.playlist_count)) return true;
+      return false;
+    }
 
-    // "Total video" biasanya keliatan dari jumlah entries hasil flat-playlist
-    // (walau di sini kita batasi 1 entri buat kecepatan, beberapa extractor
-    // tetep ngasih playlist_count di root objek).
+    // Avatar creator biasanya ditandai id spesifik ("avatar_uncropped",
+    // "avatar_larger", dst) di array thumbnails milik objek channel.
+    function pickAvatar(data) {
+      const thumbs = data.thumbnails || [];
+      const tagged = thumbs.find(t => t.id && /avatar/i.test(t.id));
+      if (tagged) return tagged.url;
+      if (!looksLikeChannelObject(data) || !thumbs.length) return null;
+
+      const fallbackUrl = thumbs.at(-1).url;
+      // Sanity check: kalau thumbnail "channel" ini persis sama dengan
+      // thumbnail video pertama di entries, itu tandanya yt-dlp sebenernya
+      // ngasih kita thumbnail VIDEO (bukan avatar asli) — mending gak usah
+      // ditampilin sama sekali daripada nampilin video-cover sebagai foto
+      // profil (kayak yang sempet kejadian).
+      const firstEntry = Array.isArray(data.entries) ? data.entries[0] : null;
+      const firstEntryThumb = firstEntry && (
+        firstEntry.thumbnail ||
+        (Array.isArray(firstEntry.thumbnails) && firstEntry.thumbnails.length ? firstEntry.thumbnails.at(-1).url : null)
+      );
+      if (firstEntryThumb && firstEntryThumb === fallbackUrl) return null;
+
+      return fallbackUrl;
+    }
+
+    let data = await tryFetchProfile('0');
+    let avatar = pickAvatar(data);
+    let name = data.channel || data.uploader || data.title || null;
+
+    // Retry pakai 1 item kalau avatar belum ketemu (dengan 0 item beberapa
+    // extractor emang gak bisa narik avatar sama sekali — perlu minimal 1
+    // video di-resolve). Nama channel biasanya udah ketemu dari percobaan
+    // pertama, jadi syarat retry cukup fokus ke avatar aja.
+    if (!avatar) {
+      const retryData = await tryFetchProfile('1');
+      const retryAvatar = pickAvatar(retryData);
+      if (retryAvatar) avatar = retryAvatar;
+      if (!name) name = retryData.channel || retryData.uploader || retryData.title || null;
+      // Field non-avatar (followers, bio, dst) pakai data mana aja yang
+      // paling lengkap — kalau percobaan kedua ternyata objeknya lebih
+      // "channel-like", pakai itu sebagai sumber utama field lainnya.
+      if (looksLikeChannelObject(retryData) && !looksLikeChannelObject(data)) data = retryData;
+    }
+
     const totalVideos = Number.isFinite(data.playlist_count) ? data.playlist_count
       : (Number.isFinite(data.n_entries) ? data.n_entries : null);
 
-    // Fallback nama/avatar: kalau field level-channel kosong, coba ambil
-    // dari entry video pertama (entries[0]) yang mungkin masih ke-bawa di
-    // hasil ekstraksi tergantung versi yt-dlp/extractor.
-    const firstEntry = (Array.isArray(data.entries) && data.entries[0]) || null;
-    const name = data.channel || data.uploader || data.title || (firstEntry && (firstEntry.channel || firstEntry.uploader)) || null;
-    const resolvedAvatar = avatar || (firstEntry && firstEntry.thumbnails && firstEntry.thumbnails.length ? firstEntry.thumbnails.at(-1).url : null);
-
-    if (!name && !resolvedAvatar) {
+    if (!name && !avatar) {
       throw new Error('Profil kosong / gak ketemu.');
     }
 
@@ -1146,7 +1190,7 @@ app.get('/api/creator-profile', rateLimit, async (req, res) => {
       success: true,
       name,
       handle: data.uploader_id || data.channel_id || null,
-      avatar: resolvedAvatar,
+      avatar,
       followers: formatCount(data.channel_follower_count),
       bio: data.description ? data.description.slice(0, 600) : null,
       isVerified: !!(data.channel_is_verified || data.uploader_verified || data.is_verified || data.artist_verified),
