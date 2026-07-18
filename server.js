@@ -236,6 +236,43 @@ function formatCount(n) {
   return String(n);
 }
 
+// yt-dlp ngasih nama codec mentah yang teknis banget, misal "avc1.640028"
+// atau "av01.0.05M.08" — user awam gak butuh angka profile/level di
+// belakangnya, cukup nama codec-nya aja (H.264, AV1, VP9, dst).
+function dlSimplifyCodecName(raw) {
+  if (!raw || raw === 'none') return null;
+  const c = raw.toLowerCase();
+  if (c.startsWith('avc1') || c.startsWith('h264')) return 'H.264';
+  if (c.startsWith('av01') || c.startsWith('av1')) return 'AV1';
+  if (c.startsWith('vp9') || c.startsWith('vp09')) return 'VP9';
+  if (c.startsWith('vp8')) return 'VP8';
+  if (c.startsWith('hev1') || c.startsWith('hvc1') || c.startsWith('h265')) return 'H.265 (HEVC)';
+  if (c.startsWith('mp4a') || c.startsWith('aac')) return 'AAC';
+  if (c.startsWith('opus')) return 'Opus';
+  if (c.startsWith('mp3')) return 'MP3';
+  if (c.startsWith('vorbis')) return 'Vorbis';
+  // Gak dikenali — kasih balik apa adanya (dipotong biar gak kepanjangan)
+  // daripada nyembunyiin info sama sekali.
+  return raw.split('.')[0].toUpperCase();
+}
+
+// Sederhanain rasio widthxheight ke bentuk umum kayak "16:9", "9:16", "1:1"
+// pakai GCD, dengan toleransi kecil ke rasio standar biar gak muncul angka
+// aneh kayak "1071:601" buat video yang sebenernya 16:9.
+function dlSimplifyAspectRatio(width, height) {
+  if (!width || !height) return null;
+  const COMMON_RATIOS = [
+    [16, 9], [9, 16], [4, 3], [3, 4], [1, 1], [21, 9], [4, 5], [5, 4]
+  ];
+  const actual = width / height;
+  for (const [w, h] of COMMON_RATIOS) {
+    if (Math.abs(actual - w / h) < 0.02) return `${w}:${h}`;
+  }
+  const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(width, height);
+  return `${width / g}:${height / g}`;
+}
+
 const ID_MONTHS = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
 // yt-dlp format upload_date: "20260716" -> "16 Jul 2026"
 function formatUploadDate(d) {
@@ -319,14 +356,30 @@ const QUALITY_FORMATS = {
   // Preview: prioritaskan format yang video+audio-nya udah nyatu (progresif)
   // biar gak perlu proses merge ffmpeg — respons lebih cepat buat sekadar
   // pratinjau sebelum download beneran.
-  preview: 'best[height<=480][acodec!=none][vcodec!=none]/best[height<=480]/best'
+  preview: 'best[height<=480][acodec!=none][vcodec!=none]/best[height<=480]/best',
+  preview_audio: 'ba/b'
 };
 
 // ── Routes ───────────────────────────────────────────────────────────────
+// Waktu proses ini mulai jalan — dipakai buat hitung uptime di /api/health.
+const SERVER_START_TIME = Date.now();
+
 app.get('/api/health', async (req, res) => {
+  const requestReceivedAt = Date.now();
   try {
     const { stdout } = await runYtDlp(['--version'], { timeoutMs: 15000 });
-    res.json({ success: true, ytdlpVersion: stdout.trim() });
+    const uptimeSeconds = Math.floor((Date.now() - SERVER_START_TIME) / 1000);
+    res.json({
+      success: true,
+      ytdlpVersion: stdout.trim(),
+      uptimeSeconds,
+      // RAILWAY_REGION di-set otomatis sama platform Railway kalau di-deploy
+      // di sana — bisa null kalau dijalanin lokal/platform lain. JUJUR: ini
+      // nunjukin di mana SATU server ini di-host, bukan pilihan beberapa
+      // server buat dipilih user (karena emang cuma ada 1 server).
+      region: process.env.RAILWAY_REGION || null,
+      serverProcessingMs: Date.now() - requestReceivedAt
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -403,6 +456,62 @@ app.post('/api/info', rateLimit, async (req, res) => {
         .filter(h => Number.isFinite(h)))
     );
 
+    // Cari format video+audio (atau video-only kalau gak ada gabungan) yang
+    // paling representatif buat height tertentu — dipakai buat estimasi
+    // ukuran file per pilihan kualitas dan buat "Analisis Video" (codec,
+    // bitrate, fps, dst) dari kualitas terbaik yang tersedia.
+    function bestFormatForHeight(targetHeight) {
+      const candidates = (info.formats || []).filter(f => f.vcodec && f.vcodec !== 'none' && f.height);
+      if (!candidates.length) return null;
+      // Cari yang paling deket ke targetHeight tanpa ngelebihin (biar cocok
+      // sama apa yang bakal beneran di-download), fallback ke yang paling
+      // tinggi kalau gak ada yang <= target.
+      const notExceeding = candidates.filter(f => f.height <= targetHeight);
+      const pool = notExceeding.length ? notExceeding : candidates;
+      return pool.reduce((best, f) => (f.height > best.height ? f : best), pool[0]);
+    }
+
+    // Estimasi ukuran file total (video+audio) buat height tertentu, dalam
+    // MB. filesize (exact) diprioritaskan; filesize_approx (dari bitrate x
+    // durasi, kadang gak persis) jadi fallback. Ukuran audio ditambahin dari
+    // format audio terbaik yang tersedia, karena kualitas video biasanya
+    // di-download bareng track audio terpisah (bv*+ba).
+    const bestAudioFormat = (info.formats || [])
+      .filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
+      .reduce((best, f) => {
+        const size = f.filesize || f.filesize_approx || 0;
+        const bestSize = best ? (best.filesize || best.filesize_approx || 0) : -1;
+        return size > bestSize ? f : best;
+      }, null);
+    const audioSizeBytes = bestAudioFormat ? (bestAudioFormat.filesize || bestAudioFormat.filesize_approx || 0) : 0;
+
+    function estimateSizeMb(targetHeight) {
+      const f = bestFormatForHeight(targetHeight);
+      if (!f) return null;
+      const videoBytes = f.filesize || f.filesize_approx || 0;
+      // Kalau format itu udah video+audio nyatu (progresif), gak usah
+      // ditambah lagi ukuran audio terpisah.
+      const alreadyHasAudio = f.acodec && f.acodec !== 'none';
+      const totalBytes = videoBytes + (alreadyHasAudio ? 0 : audioSizeBytes);
+      if (!totalBytes) return null;
+      return Math.round((totalBytes / (1024 * 1024)) * 10) / 10;
+    }
+
+    // "Analisis Video" ditampilin dari format kualitas TERTINGGI yang
+    // tersedia (yang dipakai kalau user pilih "Kualitas Terbaik") — itu yang
+    // paling relevan buat user liat sebelum mutusin mau download apa gak.
+    const topFormat = bestFormatForHeight(maxHeight || 99999);
+    const videoAnalysis = topFormat ? {
+      resolution: (topFormat.width && topFormat.height) ? `${topFormat.width}x${topFormat.height}` : null,
+      aspectRatio: (topFormat.width && topFormat.height) ? dlSimplifyAspectRatio(topFormat.width, topFormat.height) : null,
+      fps: topFormat.fps || null,
+      videoCodec: dlSimplifyCodecName(topFormat.vcodec),
+      audioCodec: dlSimplifyCodecName((bestAudioFormat && bestAudioFormat.acodec) || topFormat.acodec),
+      videoBitrateKbps: topFormat.vbr ? Math.round(topFormat.vbr) : (topFormat.tbr ? Math.round(topFormat.tbr) : null),
+      audioBitrateKbps: bestAudioFormat && bestAudioFormat.abr ? Math.round(bestAudioFormat.abr) : (topFormat.abr ? Math.round(topFormat.abr) : null),
+      dynamicRange: topFormat.dynamic_range || null // "SDR" / "HDR10" / dst, kalau extractor-nya expose
+    } : null;
+
     // Pengaman tambahan: kalau bukan photo-set (gak ada entries) TAPI juga
     // gak ada satupun format yang punya video track (semua vcodec='none'),
     // ini hampir pasti post foto yang gagal kebaca lewat entries -- jangan
@@ -421,19 +530,29 @@ app.post('/api/info', rateLimit, async (req, res) => {
         { label: '🎞️ Jadikan 1 Video (Slideshow + Musik)', value: 'photos_video' }
       ];
     } else {
-      qualities = [{ label: '🎬 Kualitas Terbaik', value: 'best' }];
+      // Helper: tempelin estimasi ukuran ke label kalau ketemu, misal
+      // "1080p" jadi "1080p (~24.3 MB)" — biar user tau ukurannya SEBELUM
+      // klik download, gak perlu nebak-nebak dulu.
+      const withSize = (label, height) => {
+        const mb = estimateSizeMb(height);
+        return { label: mb ? `${label} (~${mb} MB)` : label, sizeMb: mb };
+      };
+
+      const bestSize = estimateSizeMb(maxHeight || 99999);
+      qualities = [{ label: bestSize ? `🎬 Kualitas Terbaik (~${bestSize} MB)` : '🎬 Kualitas Terbaik', value: 'best', sizeMb: bestSize }];
       // Cuma nawarin tingkat kualitas yang beneran ada di video ini (gak
       // ada gunanya nawarin 1080p buat video yang sumbernya cuma 480p —
       // bakal ke-upscale palsu atau malah gagal format-nya).
-      if (maxHeight >= 2160) qualities.push({ label: '2160p (4K)', value: '2160' });
-      if (maxHeight >= 1440) qualities.push({ label: '1440p (2K)', value: '1440' });
-      if (maxHeight >= 1080) qualities.push({ label: '1080p', value: '1080' });
-      if (maxHeight >= 720) qualities.push({ label: '720p', value: '720' });
-      if (maxHeight >= 480 || maxHeight === 0) qualities.push({ label: '480p', value: '480' });
-      if (maxHeight >= 360) qualities.push({ label: '360p', value: '360' });
-      if (maxHeight >= 240) qualities.push({ label: '240p', value: '240' });
-      if (maxHeight >= 144) qualities.push({ label: '144p (hemat kuota)', value: '144' });
-      qualities.push({ label: '🎵 Audio (MP3)', value: 'audio' });
+      if (maxHeight >= 2160) qualities.push({ value: '2160', ...withSize('2160p (4K)', 2160) });
+      if (maxHeight >= 1440) qualities.push({ value: '1440', ...withSize('1440p (2K)', 1440) });
+      if (maxHeight >= 1080) qualities.push({ value: '1080', ...withSize('1080p', 1080) });
+      if (maxHeight >= 720) qualities.push({ value: '720', ...withSize('720p', 720) });
+      if (maxHeight >= 480 || maxHeight === 0) qualities.push({ value: '480', ...withSize('480p', 480) });
+      if (maxHeight >= 360) qualities.push({ value: '360', ...withSize('360p', 360) });
+      if (maxHeight >= 240) qualities.push({ value: '240', ...withSize('240p', 240) });
+      if (maxHeight >= 144) qualities.push({ value: '144', ...withSize('144p (hemat kuota)', 144) });
+      const audioMb = audioSizeBytes ? Math.round((audioSizeBytes / (1024 * 1024)) * 10) / 10 : null;
+      qualities.push({ label: audioMb ? `🎵 Audio (MP3) (~${audioMb} MB)` : '🎵 Audio (MP3)', value: 'audio', sizeMb: audioMb });
       qualities.push({ label: '🎧 Audio (Opus)', value: 'audio_opus' });
       qualities.push({ label: '🎼 Audio (M4A)', value: 'audio_m4a' });
 
@@ -508,7 +627,8 @@ app.post('/api/info', rateLimit, async (req, res) => {
       concurrentViewers: isLive ? formatCount(info.concurrent_view_count) : null,
       music: hasMusic ? { title: musicTitle, artist: musicArtist, album: info.album || null } : null,
       subtitleLanguages,
-      qualities
+      qualities,
+      videoAnalysis: isPhotoSet ? null : videoAnalysis
     });
   } catch (e) {
     res.status(500).json({ success: false, error: friendlyError(e.message) });
@@ -538,22 +658,23 @@ app.get('/api/download', rateLimit, async (req, res) => {
   // foto/subtitle/thumbnail yang gak punya konsep "durasi".
   const ts = Number(trimStart), te = Number(trimEnd);
   const hasTrim = Number.isFinite(ts) && Number.isFinite(te) && ts >= 0 && te > ts &&
-                  !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview'].includes(quality);
+                  !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview', 'preview_audio'].includes(quality);
 
   // SponsorBlock: cuma masuk akal buat YouTube (data komunitasnya cuma ada
   // di sana), dan cuma buat video/audio biasa sama kayak trim.
   const hasSponsorSkip = skipSponsor === '1' && /youtube\.com|youtu\.be/i.test(url) &&
-                         !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview'].includes(quality);
+                         !['photos', 'photos_video', 'subtitle', 'thumbnail', 'preview', 'preview_audio'].includes(quality);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ninzydl-'));
   const isPhotos = quality === 'photos';
   const isPhotosVideo = quality === 'photos_video';
   const isSubtitle = quality === 'subtitle';
   const isThumbnail = quality === 'thumbnail';
-  const isPreview = quality === 'preview';
+  const isPreview = quality === 'preview' || quality === 'preview_audio';
+  const isPreviewAudio = quality === 'preview_audio';
   const isMusic = quality === 'music';
-  const isAudio = quality === 'audio' || quality === 'audio_opus' || quality === 'audio_m4a' || isMusic;
-  const audioFormat = quality === 'audio_opus' ? 'opus' : (quality === 'audio_m4a' ? 'm4a' : 'mp3');
+  const isAudio = quality === 'audio' || quality === 'audio_opus' || quality === 'audio_m4a' || isMusic || isPreviewAudio;
+  const audioFormat = quality === 'audio_opus' ? 'opus' : (quality === 'audio_m4a' || isPreviewAudio ? 'm4a' : 'mp3');
 
   const args = [
     '--no-warnings', '--no-part', '--restrict-filenames',
