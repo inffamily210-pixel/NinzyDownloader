@@ -84,7 +84,8 @@ const DEFAULT_DOWNLOADER_CONFIG = {
   maintenanceMessage: null, // null = gak ada pesan, string = tampilin banner ini di card downloader
   platforms: {
     TikTok: true, YouTube: true, Instagram: true, Facebook: true,
-    'Twitter/X': true, Reddit: true, SoundCloud: true, Twitch: true
+    'Twitter/X': true, Reddit: true, SoundCloud: true, Twitch: true,
+    Pinterest: true
   }
 };
 
@@ -162,6 +163,7 @@ function detectPlatformForLog(str) {
   if (/reddit\.com/i.test(str)) return 'Reddit';
   if (/soundcloud\.com/i.test(str)) return 'SoundCloud';
   if (/twitch\.tv/i.test(str)) return 'Twitch';
+  if (/pinterest\.|pin\.it/i.test(str)) return 'Pinterest';
   return null;
 }
 
@@ -335,7 +337,9 @@ function isSupportedUrl(url) {
            /(^|\.)reddit\.com$/.test(host) ||
            /(^|\.)redd\.it$/.test(host) ||
            /(^|\.)soundcloud\.com$/.test(host) ||
-           /(^|\.)twitch\.tv$/.test(host);
+           /(^|\.)twitch\.tv$/.test(host) ||
+           /(^|\.)pinterest\.com$/.test(host) ||
+           /(^|\.)pin\.it$/.test(host);
   } catch {
     return false;
   }
@@ -350,6 +354,7 @@ function detectPlatform(url) {
   if (/reddit\.com|redd\.it/i.test(url)) return 'Reddit';
   if (/soundcloud\.com/i.test(url)) return 'SoundCloud';
   if (/twitch\.tv/i.test(url)) return 'Twitch';
+  if (/pinterest\.|pin\.it/i.test(url)) return 'Pinterest';
   return 'Video';
 }
 
@@ -514,6 +519,86 @@ const SERVER_START_TIME = Date.now();
     console.warn('[startup-cleanup] Gagal cek folder tmp:', e.message);
   }
 })();
+
+// ── Status per-platform (BEDA dari toggle admin di DEFAULT_DOWNLOADER_CONFIG) ──
+// Toggle admin itu manual, ON/OFF yang di-set orang. Ini beda: TES BENERAN
+// tiap platform masih bisa di-extract yt-dlp saat ini juga — soalnya
+// extractor bisa rusak sewaktu-waktu kalau platform sumbernya ubah struktur
+// halaman, meski gak ada yang matiin manual. Dites pakai 1 URL contoh
+// publik yang stabil per-platform, dengan --simulate (SAMA SEKALI GAK
+// download filenya, cuma coba extract metadata) + timeout pendek.
+const PLATFORM_TEST_URLS = {
+  TikTok: 'https://www.tiktok.com/@tiktok/video/7000000000000000000',
+  YouTube: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', // "Me at the zoo" — video pertama YouTube, gak bakal dihapus
+  Instagram: 'https://www.instagram.com/reel/C0000000000/', // format reel valid, ID placeholder — hasilnya "not found" kalau extractor sehat
+  Facebook: 'https://www.facebook.com/facebook/videos/10154947350226729/', // video resmi halaman Facebook
+  'Twitter/X': 'https://twitter.com/Twitter/status/1445078208190291973',
+  Reddit: 'https://www.reddit.com/r/videos/comments/abc123/test/', // format post valid, ID placeholder
+  SoundCloud: 'https://soundcloud.com/soundcloud/soundcloud-2024',
+  Twitch: 'https://www.twitch.tv/twitch', // channel URL — kalau offline, yt-dlp biasanya tetap bisa baca metadata channel (bukan realtime stream), jadi tetap valid buat tes
+  Pinterest: 'https://www.pinterest.com/pin/1/' // format pin valid, ID placeholder
+};
+// TikTok contoh di atas kemungkinan bakal 404 (ID placeholder) — buat
+// TikTok, kegagalan yang dianggap "extractor sehat" adalah error yang
+// jelas soal video-nya (gak ketemu/dihapus), BUKAN error soal extractor-nya
+// sendiri gagal ngerti halaman TikTok. Lihat isExtractorHealthyError().
+function isExtractorHealthyError(errMsg) {
+  const msg = (errMsg || '').toLowerCase();
+  // Ini pola error yang nunjukin extractor-nya JALAN NORMAL, cuma video
+  // contohnya yang emang gak ada/dihapus/private/lagi-offline — bukan
+  // extractor rusak.
+  return /not available|unavailable|404|private|removed|does not exist|no longer exists|offline|is not currently live/.test(msg);
+}
+
+let platformStatusCache = null;
+let platformStatusCacheAt = 0;
+const PLATFORM_STATUS_CACHE_MS = 5 * 60 * 1000; // 5 menit — tes ini agak berat (banyak network call), gak perlu dites ulang tiap detik
+
+async function testPlatform(name, url) {
+  const startedAt = Date.now();
+  try {
+    await runYtDlp([
+      '--simulate', '--no-warnings', '--socket-timeout', '10',
+      ...cookieArgs(), ...ytClientArgs(url), url
+    ], { timeoutMs: 20000 });
+    return { platform: name, healthy: true, checkedAt: Date.now(), latencyMs: Date.now() - startedAt };
+  } catch (e) {
+    const healthyDespiteError = isExtractorHealthyError(e.message);
+    return {
+      platform: name,
+      healthy: healthyDespiteError,
+      checkedAt: Date.now(),
+      latencyMs: Date.now() - startedAt,
+      note: healthyDespiteError ? 'Video contoh gak tersedia, tapi extractor jalan normal' : (e.message === 'TIMEOUT' ? 'Timeout' : 'Extractor gagal proses')
+    };
+  }
+}
+
+async function getPlatformStatus() {
+  if (platformStatusCache && Date.now() - platformStatusCacheAt < PLATFORM_STATUS_CACHE_MS) {
+    return platformStatusCache;
+  }
+  // Semua platform dites PARALEL (bukan satu-satu) biar total waktu tunggu
+  // gak numpuk — 9 platform x 20 detik timeout kalau serial bisa 3 menit,
+  // paralel maksimal ~20 detik aja (waktu platform paling lambat).
+  const results = await Promise.all(
+    Object.entries(PLATFORM_TEST_URLS).map(([name, url]) => testPlatform(name, url))
+  );
+  platformStatusCache = results;
+  platformStatusCacheAt = Date.now();
+  return results;
+}
+
+// Endpoint PUBLIK (read-only, gak expose apa-apa yang sensitif) — dipanggil
+// frontend buat nampilin badge aktif/gak aktif per platform.
+app.get('/api/platform-status', rateLimit, async (req, res) => {
+  try {
+    const results = await getPlatformStatus();
+    res.json({ success: true, platforms: results, cachedAt: platformStatusCacheAt });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 app.get('/api/health', async (req, res) => {
   const requestReceivedAt = Date.now();
@@ -681,10 +766,17 @@ app.post('/api/info', rateLimit, async (req, res) => {
     let subtitleLanguages = [];
     if (isPhotoSet) {
       const photoCount = (info.entries && info.entries.length) || 1;
-      qualities = [
-        { label: `📸 Download Semua Foto (${photoCount}) — ZIP`, value: 'photos' },
-        { label: '🎞️ Jadikan 1 Video (Slideshow + Musik)', value: 'photos_video' }
-      ];
+      if (photoCount > 1) {
+        qualities = [
+          { label: `📸 Download Semua Foto (${photoCount}) — ZIP`, value: 'photos' },
+          { label: '🎞️ Jadikan 1 Video (Slideshow + Musik)', value: 'photos_video' }
+        ];
+      } else {
+        // Foto tunggal (pin Pinterest biasa, atau post gambar tunggal
+        // platform lain) — "ZIP buat 1 file" kesannya aneh, dan opsi
+        // slideshow gak relevan buat 1 gambar doang.
+        qualities = [{ label: '🖼️ Download Foto', value: 'photos' }];
+      }
     } else {
       // Helper: tempelin estimasi ukuran ke label kalau ketemu, misal
       // "1080p" jadi "1080p (~24.3 MB)" — biar user tau ukurannya SEBELUM
@@ -951,6 +1043,25 @@ app.get('/api/download', rateLimit, async (req, res) => {
     if (isPhotos) {
       const files = fs.readdirSync(tmpDir).filter(f => !f.startsWith('.'));
       if (!files.length) throw new Error('Foto tidak ditemukan di post ini.');
+
+      // Foto tunggal (pin Pinterest, atau post gambar tunggal platform lain)
+      // — kirim langsung file-nya, gak usah di-ZIP. User gak perlu extract
+      // ZIP cuma buat 1 gambar.
+      if (files.length === 1) {
+        const filePath = path.join(tmpDir, files[0]);
+        const ext = path.extname(files[0]).replace('.', '') || 'jpg';
+        const stat = fs.statSync(filePath);
+        const safeName = `ninzy_foto_${crypto.randomBytes(3).toString('hex')}.${ext}`;
+        const contentType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        const stream = fs.createReadStream(filePath);
+        stream.pipe(res);
+        stream.on('close', cleanup);
+        stream.on('error', () => { cleanup(); if (!res.headersSent) res.status(500).end(); });
+        return;
+      }
 
       const zipPath = path.join(tmpDir, 'photos.zip');
       await new Promise((resolve, reject) => {
