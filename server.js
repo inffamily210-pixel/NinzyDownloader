@@ -20,6 +20,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const https = require('https');
 
 // ── Firebase Admin SDK (server-side, punya akses penuh, TIDAK terikat
 // Firestore Security Rules) ────────────────────────────────────────────
@@ -321,6 +322,62 @@ function batchRateLimit(req, res, next) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+// Beberapa short-link (paling umum: pin.it dari Pinterest) kadang gagal
+// di-resolve langsung sama yt-dlp — extractor Pinterest-nya kadang gak
+// ngikutin redirect short-link dengan bener (bug lama yt-dlp, bukan sesuatu
+// yang bisa kita perbaiki dari sisi ini). Solusinya: kita resolve
+// redirect-nya SENDIRI dulu di sini (murni baca header HTTP "Location",
+// SAMA SEKALI GAK ngambil/nyimpen isi halaman), baru kirim URL hasil akhir
+// (yang udah pinterest.com/pin/... lengkap) ke yt-dlp.
+function resolveRedirectUrl(url, maxRedirects = 5) {
+  return new Promise((resolve) => {
+    if (maxRedirects <= 0) return resolve(url); // kehabisan hop, pakai apa adanya
+
+    let target;
+    try { target = new URL(url); } catch { return resolve(url); }
+
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: 'HEAD',
+      timeout: 8000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NinzyDownloader/1.0)' }
+    }, (res) => {
+      const location = res.headers.location;
+      if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+        // Location kadang relatif, kadang URL penuh — resolve relatif
+        // terhadap URL saat ini kalau perlu.
+        let nextUrl;
+        try { nextUrl = new URL(location, target).toString(); } catch { return resolve(url); }
+        res.resume(); // buang body-nya (harusnya emang kosong buat HEAD), biar koneksi bisa ditutup bersih
+        resolve(resolveRedirectUrl(nextUrl, maxRedirects - 1));
+      } else {
+        res.resume();
+        resolve(target.toString()); // gak ada redirect lagi, ini URL final-nya
+      }
+    });
+
+    req.on('error', () => resolve(url)); // gagal resolve, pakai URL asli aja — biar yt-dlp yang coba sendiri
+    req.on('timeout', () => { req.destroy(); resolve(url); });
+    req.end();
+  });
+}
+
+// Domain-domain yang short-link-nya diketahui suka gagal di-resolve
+// langsung sama yt-dlp — cuma domain INI yang bakal di-expand manual dulu,
+// biar gak nambahin latency network buat platform lain yang emang udah
+// jalan normal tanpa perlu resolve tambahan.
+const SHORTLINK_DOMAINS = ['pin.it'];
+async function expandShortlinkIfNeeded(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    if (SHORTLINK_DOMAINS.includes(host)) {
+      return await resolveRedirectUrl(url);
+    }
+  } catch { /* URL gak valid, biarin aja gagal natural di validasi selanjutnya */ }
+  return url;
+}
+
 function isSupportedUrl(url) {
   try {
     const u = new URL(url);
@@ -455,6 +512,13 @@ function friendlyError(rawMessage) {
   // kualitas video, yt-dlp bakal bilang "Requested format is not available".
   if (msg.includes('requested format is not available') || msg.includes('no video formats')) {
     return 'Postingan ini kemungkinan foto/slideshow, bukan video — coba cek ulang link-nya lalu pakai opsi "Download Semua Foto" atau "Jadikan 1 Video".';
+  }
+  // Dukungan yt-dlp buat TikTok photo mode/album itu memang belum konsisten
+  // (bukan bug di server ini — issue terbuka di yt-dlp sendiri, statusnya
+  // "wontfix"). Kalau error-nya nunjuk-nunjuk ke pola ini, kasih tau jujur
+  // daripada pesan generik yang bikin user pikir link-nya salah ketik.
+  if (msg.includes('no formats found') || msg.includes("couldn't find") || (msg.includes('tiktok') && msg.includes('photo'))) {
+    return 'TikTok kadang gak konsisten buat postingan foto/album tertentu — bukan link-nya salah, tapi keterbatasan dari extractor yt-dlp buat jenis postingan ini. Coba lagi beberapa saat, atau screenshot manual kalau mendesak.';
   }
   return 'Gagal memproses video. Coba link lain atau ulangi beberapa saat lagi.';
 }
@@ -622,13 +686,16 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.post('/api/info', rateLimit, async (req, res) => {
-  const { url } = req.body || {};
+  let { url } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ success: false, error: 'URL wajib diisi.' });
   }
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
   }
+  // Expand short-link (pin.it dll) ke URL penuh dulu — beberapa extractor
+  // yt-dlp gagal ngikutin redirect short-link sendiri.
+  url = await expandShortlinkIfNeeded(url);
 
   const blockedCheck = await checkDownloaderEnabled(url);
   if (blockedCheck) {
@@ -678,9 +745,25 @@ app.post('/api/info', rateLimit, async (req, res) => {
     // salah kebaca sebagai video biasa (yang ujungnya gagal pas didownload
     // karena isinya gambar diam, bukan video).
     const noPlaylistArg = /youtube\.com|youtu\.be/i.test(url) ? ['--no-playlist'] : [];
-    const { stdout } = await runYtDlp([
-      '-j', '--no-warnings', ...noPlaylistArg, '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
-    ], { timeoutMs: 45000 });
+    const isTikTokUrl = /tiktok\.com/i.test(url);
+    let stdout;
+    try {
+      ({ stdout } = await runYtDlp([
+        '-j', '--no-warnings', ...noPlaylistArg, '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
+      ], { timeoutMs: 45000 }));
+    } catch (firstError) {
+      // TikTok photo mode/album kadang gagal total di percobaan pertama
+      // (dukungan yt-dlp buat jenis postingan ini emang belum konsisten —
+      // issue terbuka di yt-dlp sendiri). --ignore-no-formats-error bikin
+      // yt-dlp tetap coba ambil METADATA-nya aja meski gak nemu format video
+      // yang bisa didownload — kadang ini cukup buat "menyelamatkan" info
+      // dasar (title, entries foto) walau percobaan normal gagal total.
+      if (!isTikTokUrl) throw firstError;
+      ({ stdout } = await runYtDlp([
+        '-j', '--no-warnings', '--ignore-no-formats-error', ...noPlaylistArg,
+        '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
+      ], { timeoutMs: 45000 }));
+    }
 
     const firstLine = stdout.split('\n').find(l => l.trim().startsWith('{'));
     if (!firstLine) throw new Error('Tidak bisa membaca info video.');
@@ -884,13 +967,15 @@ app.post('/api/info', rateLimit, async (req, res) => {
 });
 
 app.get('/api/download', rateLimit, async (req, res) => {
-  const { url, quality = 'best', trimStart, trimEnd, subLang, skipSponsor, format } = req.query;
+  let { url, quality = 'best', trimStart, trimEnd, subLang, skipSponsor, format } = req.query;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ success: false, error: 'URL wajib diisi.' });
   }
   if (!isSupportedUrl(url)) {
     return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
   }
+  // Expand short-link (pin.it dll) ke URL penuh dulu — sama seperti /api/info.
+  url = await expandShortlinkIfNeeded(url);
   const blockedCheck = await checkDownloaderEnabled(url);
   if (blockedCheck) {
     return res.status(blockedCheck.statusCode).json({ success: false, error: blockedCheck.error });
@@ -1249,7 +1334,7 @@ async function runBatchDownload(cleanUrls, quality, res) {
 
 app.post('/api/batch-download', batchRateLimit, async (req, res) => {
   const { urls, quality = 'best' } = req.body || {};
-  const cleanUrls = Array.isArray(urls) ? urls.map(u => (u || '').trim()).filter(Boolean) : [];
+  let cleanUrls = Array.isArray(urls) ? urls.map(u => (u || '').trim()).filter(Boolean) : [];
 
   if (!cleanUrls.length) {
     return res.status(400).json({ success: false, error: 'Daftar link kosong.' });
@@ -1262,6 +1347,8 @@ app.post('/api/batch-download', batchRateLimit, async (req, res) => {
       return res.status(400).json({ success: false, error: `Link tidak didukung: ${u}` });
     }
   }
+  // Expand short-link (pin.it dll) di semua URL batch sekaligus, paralel.
+  cleanUrls = await Promise.all(cleanUrls.map(u => expandShortlinkIfNeeded(u)));
   if (!['best', '2160', '1440', '1080', '720', '480', '360', '240', '144', 'audio', 'audio_opus', 'audio_m4a'].includes(quality)) {
     return res.status(400).json({ success: false, error: 'Pilihan kualitas tidak valid untuk batch.' });
   }
