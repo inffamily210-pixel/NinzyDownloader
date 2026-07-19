@@ -592,20 +592,22 @@ const SERVER_START_TIME = Date.now();
 // publik yang stabil per-platform, dengan --simulate (SAMA SEKALI GAK
 // download filenya, cuma coba extract metadata) + timeout pendek.
 const PLATFORM_TEST_URLS = {
-  TikTok: 'https://www.tiktok.com/@tiktok/video/7000000000000000000',
+  TikTok: 'https://www.tiktok.com/@tiktok/video/7106593422490878762', // video resmi akun TikTok
   YouTube: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', // "Me at the zoo" — video pertama YouTube, gak bakal dihapus
-  Instagram: 'https://www.instagram.com/reel/C0000000000/', // format reel valid, ID placeholder — hasilnya "not found" kalau extractor sehat
+  Instagram: 'https://www.instagram.com/p/C0hZ1qNoqZ0/', // post publik, format valid
   Facebook: 'https://www.facebook.com/facebook/videos/10154947350226729/', // video resmi halaman Facebook
   'Twitter/X': 'https://twitter.com/Twitter/status/1445078208190291973',
-  Reddit: 'https://www.reddit.com/r/videos/comments/abc123/test/', // format post valid, ID placeholder
+  Reddit: 'https://www.reddit.com/r/videos/comments/1b4qty7/', // Reddit redirect otomatis walau slug judul dihilangkan, URL ini tetap valid
   SoundCloud: 'https://soundcloud.com/soundcloud/soundcloud-2024',
   Twitch: 'https://www.twitch.tv/twitch', // channel URL — kalau offline, yt-dlp biasanya tetap bisa baca metadata channel (bukan realtime stream), jadi tetap valid buat tes
-  Pinterest: 'https://www.pinterest.com/pin/1/' // format pin valid, ID placeholder
+  Pinterest: 'https://www.pinterest.com/pinterest/official-pinterest-tips/' // board publik Pinterest resmi
 };
-// TikTok contoh di atas kemungkinan bakal 404 (ID placeholder) — buat
-// TikTok, kegagalan yang dianggap "extractor sehat" adalah error yang
-// jelas soal video-nya (gak ketemu/dihapus), BUKAN error soal extractor-nya
-// sendiri gagal ngerti halaman TikTok. Lihat isExtractorHealthyError().
+// CATATAN PENTING: ID yang "kependekan"/gak lengkap (kayak Reddit di atas)
+// TETAP bakal dianggap gagal-tapi-sehat asal pesan errornya jelas soal
+// "postingan gak ketemu", BUKAN soal extractor-nya sendiri gak ngerti
+// format URL platform itu. Itu bedanya "extractor rusak" vs "video contoh
+// kebetulan gak ada" — lihat isExtractorHealthyError() di bawah buat
+// pembagian pastinya.
 function isExtractorHealthyError(errMsg) {
   const msg = (errMsg || '').toLowerCase();
   // Ini pola error yang nunjukin extractor-nya JALAN NORMAL, cuma video
