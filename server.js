@@ -506,7 +506,7 @@ const apiKeyRateMap = new Map();
 async function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
   if (!key || typeof key !== 'string') {
-    return res.status(401).json({ success: false, error: 'Header X-API-Key wajib diisi. Buat key di menu Profil → API Access.' });
+    return res.status(401).json({ success: false, error: 'Header X-API-Key wajib diisi. Buat key di Admin Panel → 🔌 API Access.' });
   }
   if (!fsDb) {
     return res.status(500).json({ success: false, error: 'Server belum terhubung ke Firebase.' });
