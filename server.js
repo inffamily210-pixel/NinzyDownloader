@@ -321,6 +321,223 @@ function batchRateLimit(req, res, next) {
   next();
 }
 
+function sha256Hex(str) {
+  return crypto.createHash('sha256').update(str).digest('hex');
+}
+
+// ── Push Notification (Web Push / VAPID) ──────────────────────────────────
+// Upgrade dari Notification API biasa (butuh tab kebuka) ke Push API asli:
+// notifikasi tetap masuk walau app-nya ketutup total, karena yang "bangunin"
+// browser itu push service (FCM dkk di level OS/browser), bukan tab yang
+// masih jalan. Server cuma ngirim payload terenkripsi ke endpoint push
+// service — gak peduli tab-nya kebuka atau nggak.
+//
+// Setup di Railway → Variables:
+//   VAPID_PUBLIC_KEY  = (lihat pesan Claude — sudah digenerate, tinggal pakai)
+//   VAPID_PRIVATE_KEY = (idem — JANGAN disebar/commit ke git)
+//   VAPID_SUBJECT     = mailto:email-kamu@gmail.com (kontak buat push service kalau ada masalah)
+const webpush = require('web-push');
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || null;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || null;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@ninzycompress.com';
+const PUSH_ENABLED = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  console.log('[push] VAPID siap, push notification aktif.');
+} else {
+  console.warn('[push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY belum diset — endpoint push nonaktif dulu.');
+}
+
+// subId = sha256(endpoint) push subscription. Dipakai sebagai ID dokumen
+// Firestore biar lookup pas kirim push tinggal 1x get(), dan biar gak perlu
+// nyimpen endpoint mentah (yang lumayan panjang) di banyak tempat lain
+// (creatorWatch.subscriberSubIds cukup nyimpen subId, bukan subscription utuh).
+async function sendPushToSubId(subId, payload) {
+  if (!PUSH_ENABLED || !fsDb) return { ok: false, reason: 'push_disabled' };
+  const ref = fsDb.collection('pushSubscriptions').doc(subId);
+  const snap = await ref.get();
+  if (!snap.exists) return { ok: false, reason: 'not_found' };
+  try {
+    await webpush.sendNotification(snap.data().subscription, JSON.stringify(payload));
+    ref.set({ lastSentAt: Date.now() }, { merge: true }).catch(() => {});
+    return { ok: true };
+  } catch (e) {
+    // 404/410 dari push service artinya subscription-nya udah gak valid lagi
+    // (uninstall, permission dicabut, dst) — bersihin dari Firestore sekalian.
+    if (e.statusCode === 404 || e.statusCode === 410) {
+      ref.delete().catch(() => {});
+      return { ok: false, reason: 'expired' };
+    }
+    return { ok: false, reason: e.message };
+  }
+}
+
+// Preset notifikasi — SENGAJA gak nerima title/body bebas dari client, biar
+// /api/push/send gak jadi "kirim teks apa aja ke device sendiri" yang gampang
+// disalahgunakan. Teksnya dikontrol terpusat di sini; tinggal tambah key baru
+// kalau mau bikin jenis notifikasi lain (reward spin siap diklaim, dll).
+const PUSH_PRESETS = {
+  'compress-done': (data) => ({
+    title: '✅ Kompresi selesai',
+    body: (data && data.filename) ? `${data.filename} siap diunduh` : 'Video kamu siap diunduh',
+    url: '/'
+  }),
+  'test': () => ({
+    title: '🔔 Notifikasi percobaan',
+    body: 'Kalau ini muncul, push notification kamu udah aktif!',
+    url: '/'
+  })
+};
+
+// ── Creator Watch (alert upload baru dari creator favorit) ────────────────
+// SENGAJA dipisah dari /api/creator-videos yang udah ada: di sini cuma butuh
+// 1 video TERBARU buat dibandingin sama lastVideoId tersimpan, jadi pakai
+// --playlist-end 1 biar cron-nya ringan & cepat — gak perlu thumbnail/durasi
+// dst kayak /api/creator-videos yang memang buat ditampilin ke user.
+async function fetchLatestVideoForCreator(uploaderUrl) {
+  const { stdout } = await runYtDlp([
+    '--flat-playlist', '-j', '--no-warnings', '--playlist-end', '1',
+    '--socket-timeout', '15', ...cookieArgs(), ...ytClientArgs(uploaderUrl), uploaderUrl
+  ], { timeoutMs: 30000 });
+  const entry = stdout.split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('{'))
+    .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .find(e => e && e.id);
+  if (!entry) return null;
+  const platform = detectPlatform(uploaderUrl);
+  let videoUrl = null;
+  if (entry.webpage_url) videoUrl = entry.webpage_url;
+  else if (entry.url && /^https?:\/\//.test(entry.url)) videoUrl = entry.url;
+  else if (platform === 'YouTube') videoUrl = `https://www.youtube.com/watch?v=${entry.id}`;
+  return { id: entry.id, title: entry.title || 'Video baru', url: videoUrl };
+}
+
+const CREATOR_WATCH_INTERVAL_MS = (parseInt(process.env.CREATOR_WATCH_INTERVAL_MINUTES, 10) || 30) * 60 * 1000;
+
+// Loop cron utama: jalan tiap CREATOR_WATCH_INTERVAL_MS, cek SEMUA creator
+// yang punya minimal 1 subscriber, SATU-SATU (sequential + jeda, BUKAN
+// Promise.all paralel) — biar server gratisan Railway gak keberatan nge-spawn
+// banyak proses yt-dlp bersamaan (alasan sama kayak batchRateLimit di atas).
+async function runCreatorWatchCheck() {
+  if (!fsDb) return;
+  let snap;
+  try {
+    snap = await fsDb.collection('creatorWatch').get();
+  } catch (e) {
+    console.error('[creatorWatch] Gagal ambil daftar creator:', e.message);
+    return;
+  }
+  const docs = snap.docs.filter(d => Array.isArray(d.data().subscriberSubIds) && d.data().subscriberSubIds.length > 0);
+  if (!docs.length) return;
+  console.log(`[creatorWatch] Cek ${docs.length} creator...`);
+  for (const doc of docs) {
+    const data = doc.data();
+    try {
+      const latest = await fetchLatestVideoForCreator(data.uploaderUrl);
+      if (latest) {
+        const isNew = data.lastVideoId && latest.id !== data.lastVideoId;
+        if (isNew) {
+          console.log(`[creatorWatch] Upload baru dari ${data.name}: ${latest.title}`);
+          for (const subId of data.subscriberSubIds) {
+            sendPushToSubId(subId, {
+              title: `📢 ${data.name} upload baru`,
+              body: latest.title,
+              url: latest.url || '/'
+            }).catch(() => {});
+          }
+        }
+        await doc.ref.set({ lastVideoId: latest.id, lastVideoTitle: latest.title, lastCheckedAt: Date.now() }, { merge: true });
+      }
+    } catch (e) {
+      console.warn(`[creatorWatch] Gagal cek ${data.name}:`, e.message);
+    }
+    // Jeda antar-creator biar gak nge-spawn semua proses yt-dlp bersamaan.
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+// ── API Access untuk developer (fitur #113 di showcase, sebelumnya cuma UI) ─
+// Key TIDAK disimpan mentah — yang disimpan cuma hash SHA-256-nya, dan ID
+// dokumen Firestore = hash itu sendiri (biar validasi tinggal 1x get() by ID).
+// Plaintext key CUMA ditampilin sekali pas baru dibuat, persis kayak GitHub
+// Personal Access Token — kalau ke-skip/ilang, user harus generate key baru.
+const API_KEY_PREFIX = 'ninzy_live_';
+const API_KEY_MAX_PER_USER = 3;
+const API_KEY_RATE_PER_MIN = parseInt(process.env.API_KEY_RATE_PER_MIN, 10) || 60;
+
+function generateApiKey() {
+  return API_KEY_PREFIX + crypto.randomBytes(24).toString('hex');
+}
+
+// Verifikasi identitas user PREMIUM dari Firebase ID token — BUKAN dari email
+// yang dikirim client mentah-mentah kayak /api/redeem-code (itu cukup buat
+// tempel kode aktivasi, tapi buat nerbitin API key produksi harusnya lebih
+// ketat). Konsekuensinya: user WAJIB login pakai Google (signInWithPopup) buat
+// fitur ini, karena cuma login itu yang menghasilkan ID token yang bisa
+// diverifikasi cryptographically lewat admin.auth().verifyIdToken(). Login
+// email/password lokal (sistem lama app ini, localStorage-only) gak
+// menghasilkan Firebase ID token sama sekali, jadi belum bisa dipakai di sini.
+async function getVerifiedPremiumEmail(req) {
+  const authHeader = req.headers.authorization || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return { error: 'Login dengan Google dulu buat akses fitur ini.', status: 401 };
+  if (!fsDb) return { error: 'Server belum terhubung ke Firebase.', status: 500 };
+  let decoded;
+  try {
+    decoded = await admin.auth().verifyIdToken(idToken);
+  } catch (e) {
+    return { error: 'Sesi login gak valid, coba login ulang.', status: 401 };
+  }
+  const email = (decoded.email || '').toLowerCase().trim();
+  if (!email) return { error: 'Akun Google kamu gak punya email.', status: 400 };
+  const snap = await fsDb.collection('users').doc(email).get();
+  const premiumExpiry = snap.exists ? (snap.data().premiumExpiry || 0) : 0;
+  if (premiumExpiry <= Date.now()) {
+    return { error: 'API Access khusus member Premium. Upgrade dulu ya.', status: 403 };
+  }
+  return { email };
+}
+
+const apiKeyRateMap = new Map();
+// Middleware buat endpoint /api/v1/* — beda dari rateLimit (per-IP) di atas,
+// karena integrasi developer itu wajar jalan dari 1 server/IP yang sama
+// terus-menerus. Yang mau dibatasi di sini per KEY, bukan per IP.
+async function requireApiKey(req, res, next) {
+  const key = req.headers['x-api-key'];
+  if (!key || typeof key !== 'string') {
+    return res.status(401).json({ success: false, error: 'Header X-API-Key wajib diisi. Buat key di menu Profil → API Access.' });
+  }
+  if (!fsDb) {
+    return res.status(500).json({ success: false, error: 'Server belum terhubung ke Firebase.' });
+  }
+  const hash = sha256Hex(key);
+  let snap;
+  try {
+    snap = await fsDb.collection('apiKeys').doc(hash).get();
+  } catch (e) {
+    return res.status(500).json({ success: false, error: 'Gagal validasi API key.' });
+  }
+  if (!snap.exists || snap.data().revoked) {
+    return res.status(401).json({ success: false, error: 'API key gak valid atau sudah di-revoke.' });
+  }
+  // Rate limit per-key, in-memory (reset kalau server restart — sama kayak
+  // limiter lain di file ini, bukan cuma buat endpoint ini).
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const entry = apiKeyRateMap.get(hash) || { count: 0, start: now };
+  if (now - entry.start > windowMs) { entry.count = 0; entry.start = now; }
+  entry.count++;
+  apiKeyRateMap.set(hash, entry);
+  if (entry.count > API_KEY_RATE_PER_MIN) {
+    return res.status(429).json({ success: false, error: `Rate limit ${API_KEY_RATE_PER_MIN} request/menit terlampaui.` });
+  }
+  // Catat pemakaian — fire-and-forget, gak boleh nge-block response ke developer.
+  snap.ref.set({ lastUsedAt: now, requestCount: admin.firestore.FieldValue.increment(1) }, { merge: true }).catch(() => {});
+  req.apiKeyOwner = snap.data().ownerEmail;
+  next();
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 // Beberapa short-link (paling umum: pin.it dari Pinterest) kadang gagal
 // di-resolve langsung sama yt-dlp — extractor Pinterest-nya kadang gak
@@ -687,13 +904,13 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-app.post('/api/info', rateLimit, async (req, res) => {
+async function handleInfoRequest(req, res) {
   let { url } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ success: false, error: 'URL wajib diisi.' });
   }
   if (!isSupportedUrl(url)) {
-    return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
+    return res.status(400).json({ success: false, error: 'Link harus dari TikTok, YouTube, Instagram, Facebook, Twitter/X, Reddit, SoundCloud, Twitch, atau Pinterest.' });
   }
   // Expand short-link (pin.it dll) ke URL penuh dulu — beberapa extractor
   // yt-dlp gagal ngikutin redirect short-link sendiri.
@@ -966,15 +1183,17 @@ app.post('/api/info', rateLimit, async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: friendlyError(e.message) });
   }
-});
+}
+app.post('/api/info', rateLimit, handleInfoRequest);
+app.post('/api/v1/info', requireApiKey, handleInfoRequest);
 
-app.get('/api/download', rateLimit, async (req, res) => {
+async function handleDownloadRequest(req, res) {
   let { url, quality = 'best', trimStart, trimEnd, subLang, skipSponsor, format } = req.query;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ success: false, error: 'URL wajib diisi.' });
   }
   if (!isSupportedUrl(url)) {
-    return res.status(400).json({ success: false, error: 'Link harus dari TikTok atau YouTube.' });
+    return res.status(400).json({ success: false, error: 'Link harus dari TikTok, YouTube, Instagram, Facebook, Twitter/X, Reddit, SoundCloud, Twitch, atau Pinterest.' });
   }
   // Expand short-link (pin.it dll) ke URL penuh dulu — sama seperti /api/info.
   url = await expandShortlinkIfNeeded(url);
@@ -1251,7 +1470,9 @@ app.get('/api/download', rateLimit, async (req, res) => {
       res.end();
     }
   }
-});
+}
+app.get('/api/download', rateLimit, handleDownloadRequest);
+app.get('/api/v1/download', requireApiKey, handleDownloadRequest);
 
 const BATCH_MAX_URLS = 5;
 
@@ -1966,6 +2187,213 @@ app.get('/api/downloader-config', rateLimit, async (req, res) => {
   res.json({ success: true, config });
 });
 
+// ── Push Notification: public key, subscribe, unsubscribe, kirim ──────────
+app.get('/api/push/public-key', (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ success: false, error: 'Push notification belum dikonfigurasi di server.' });
+  res.json({ success: true, publicKey: VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/subscribe', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ success: false, error: 'Push notification belum dikonfigurasi di server.' });
+  const { subscription, email } = req.body || {};
+  if (!subscription || !subscription.endpoint || !subscription.keys) {
+    return res.status(400).json({ success: false, error: 'Data subscription gak lengkap.' });
+  }
+  const subId = sha256Hex(subscription.endpoint);
+  try {
+    const ref = fsDb.collection('pushSubscriptions').doc(subId);
+    const existing = await ref.get();
+    await ref.set({
+      subscription,
+      email: (email || '').toLowerCase().trim() || null,
+      userAgent: (req.headers['user-agent'] || '').slice(0, 300),
+      updatedAt: Date.now(),
+      ...(existing.exists ? {} : { createdAt: Date.now() })
+    }, { merge: true });
+    res.json({ success: true, subId });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal simpan subscription.' });
+  }
+});
+
+app.post('/api/push/unsubscribe', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const { endpoint } = req.body || {};
+  if (!endpoint) return res.status(400).json({ success: false, error: 'Endpoint wajib diisi.' });
+  try {
+    await fsDb.collection('pushSubscriptions').doc(sha256Hex(endpoint)).delete();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal hapus subscription.' });
+  }
+});
+
+// Relay dari client buat notifikasi yang triggernya kejadian di BROWSER
+// (kompresi FFmpeg.wasm selesai, dll — bukan sesuatu yang backend ini bisa
+// tau sendiri). "type" dibatasi ke PUSH_PRESETS di atas, bukan title/body
+// bebas, biar endpoint ini gak jadi celah spam-notif ke diri sendiri.
+app.post('/api/push/send', rateLimit, async (req, res) => {
+  if (!PUSH_ENABLED) return res.status(503).json({ success: false, error: 'Push notification belum dikonfigurasi di server.' });
+  const { endpoint, type, data } = req.body || {};
+  if (!endpoint || !PUSH_PRESETS[type]) {
+    return res.status(400).json({ success: false, error: 'endpoint atau type gak valid.' });
+  }
+  const result = await sendPushToSubId(sha256Hex(endpoint), PUSH_PRESETS[type](data));
+  if (!result.ok) {
+    return res.status(result.reason === 'not_found' ? 404 : 500).json({ success: false, error: 'Gagal kirim push (' + result.reason + ').' });
+  }
+  res.json({ success: true });
+});
+
+// ── Creator Watch: subscribe/unsubscribe alert upload baru dari favorit ───
+app.post('/api/creator-watch/subscribe', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const { uploaderUrl, name, platform, avatar, endpoint } = req.body || {};
+  if (!uploaderUrl || !isSupportedUrl(uploaderUrl) || !endpoint) {
+    return res.status(400).json({ success: false, error: 'Data creator/endpoint gak lengkap atau gak valid.' });
+  }
+  const subId = sha256Hex(endpoint);
+  try {
+    const subSnap = await fsDb.collection('pushSubscriptions').doc(subId).get();
+    if (!subSnap.exists) {
+      return res.status(400).json({ success: false, error: 'Aktifkan push notification dulu sebelum subscribe creator.' });
+    }
+    const ref = fsDb.collection('creatorWatch').doc(sha256Hex(uploaderUrl));
+    const existing = await ref.get();
+    if (!existing.exists) {
+      // Seed lastVideoId dari video TERBARU SAAT INI, biar user gak langsung
+      // dapet notif "upload baru" buat video yang sebenernya udah lama ada.
+      let seed = null;
+      try { seed = await fetchLatestVideoForCreator(uploaderUrl); } catch (e) {}
+      await ref.set({
+        uploaderUrl, name: name || 'Creator', platform: platform || 'Unknown', avatar: avatar || null,
+        lastVideoId: seed ? seed.id : null,
+        lastVideoTitle: seed ? seed.title : null,
+        lastCheckedAt: Date.now(),
+        createdAt: Date.now(),
+        subscriberSubIds: [subId]
+      });
+    } else {
+      await ref.set({ subscriberSubIds: admin.firestore.FieldValue.arrayUnion(subId) }, { merge: true });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal subscribe creator watch.' });
+  }
+});
+
+app.post('/api/creator-watch/unsubscribe', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const { uploaderUrl, endpoint } = req.body || {};
+  if (!uploaderUrl || !endpoint) return res.status(400).json({ success: false, error: 'Data gak lengkap.' });
+  try {
+    const ref = fsDb.collection('creatorWatch').doc(sha256Hex(uploaderUrl));
+    await ref.set({ subscriberSubIds: admin.firestore.FieldValue.arrayRemove(sha256Hex(endpoint)) }, { merge: true });
+    const after = await ref.get();
+    if (after.exists && (!after.data().subscriberSubIds || !after.data().subscriberSubIds.length)) {
+      await ref.delete();
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal unsubscribe creator watch.' });
+  }
+});
+
+// ── API Access developer: generate / list / revoke key (fitur #113) ───────
+app.post('/api/developer/keys', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const auth = await getVerifiedPremiumEmail(req);
+  if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
+  try {
+    const existing = await fsDb.collection('apiKeys').where('ownerEmail', '==', auth.email).where('revoked', '==', false).get();
+    if (existing.size >= API_KEY_MAX_PER_USER) {
+      return res.status(400).json({ success: false, error: `Maksimal ${API_KEY_MAX_PER_USER} API key aktif. Revoke salah satu dulu.` });
+    }
+    const plainKey = generateApiKey();
+    const hash = sha256Hex(plainKey);
+    await fsDb.collection('apiKeys').doc(hash).set({
+      ownerEmail: auth.email,
+      label: ((req.body || {}).label || 'Default').slice(0, 60),
+      prefix: plainKey.slice(0, API_KEY_PREFIX.length + 6),
+      createdAt: Date.now(),
+      lastUsedAt: null,
+      revoked: false,
+      requestCount: 0
+    });
+    // plainKey CUMA muncul di response ini — gak pernah disimpan mentah di Firestore.
+    res.json({ success: true, key: plainKey });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal buat API key.' });
+  }
+});
+
+app.get('/api/developer/keys', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const auth = await getVerifiedPremiumEmail(req);
+  if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
+  try {
+    const snap = await fsDb.collection('apiKeys').where('ownerEmail', '==', auth.email).get();
+    const keys = snap.docs.map(d => {
+      const v = d.data();
+      return {
+        id: d.id, label: v.label, prefix: v.prefix + '••••••••',
+        createdAt: v.createdAt, lastUsedAt: v.lastUsedAt || null,
+        revoked: !!v.revoked, requestCount: v.requestCount || 0
+      };
+    }).sort((a, b) => b.createdAt - a.createdAt);
+    res.json({ success: true, keys });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal ambil daftar API key.' });
+  }
+});
+
+app.post('/api/developer/keys/:keyId/revoke', rateLimit, requireFirebaseAdmin, async (req, res) => {
+  const auth = await getVerifiedPremiumEmail(req);
+  if (auth.error) return res.status(auth.status).json({ success: false, error: auth.error });
+  try {
+    const ref = fsDb.collection('apiKeys').doc(req.params.keyId);
+    const snap = await ref.get();
+    if (!snap.exists || snap.data().ownerEmail !== auth.email) {
+      return res.status(404).json({ success: false, error: 'API key gak ditemukan.' });
+    }
+    await ref.set({ revoked: true }, { merge: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal revoke API key.' });
+  }
+});
+
+// ── Admin: oversight API key & Creator Watch (pantau abuse/usage) ─────────
+app.get('/api/admin/api-keys', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  try {
+    const snap = await fsDb.collection('apiKeys').orderBy('createdAt', 'desc').limit(200).get();
+    const keys = snap.docs.map(d => {
+      const v = d.data();
+      return { id: d.id, ownerEmail: v.ownerEmail, label: v.label, prefix: v.prefix, createdAt: v.createdAt, lastUsedAt: v.lastUsedAt || null, revoked: !!v.revoked, requestCount: v.requestCount || 0 };
+    });
+    res.json({ success: true, keys });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/admin/api-keys/:keyId/revoke', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  try {
+    await fsDb.collection('apiKeys').doc(req.params.keyId).set({ revoked: true }, { merge: true });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/admin/creator-watch', requireAdminToken, requireFirebaseAdmin, async (req, res) => {
+  try {
+    const snap = await fsDb.collection('creatorWatch').get();
+    const creators = snap.docs.map(d => {
+      const v = d.data();
+      return { id: d.id, name: v.name, platform: v.platform, uploaderUrl: v.uploaderUrl, subscriberCount: (v.subscriberSubIds || []).length, lastVideoTitle: v.lastVideoTitle, lastCheckedAt: v.lastCheckedAt };
+    });
+    res.json({ success: true, creators, intervalMinutes: CREATOR_WATCH_INTERVAL_MS / 60000 });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`NinzyDownloader backend jalan di port ${PORT}`);
 
@@ -1991,4 +2419,17 @@ app.listen(PORT, () => {
       process.exit(1);
     }
   }, WATCHDOG_INTERVAL_MS);
+
+  // ── Cron Creator Watch ────────────────────────────────────────────────
+  // Cek pertama sengaja ditunda dikit (2 menit) biar gak numpuk sama proses
+  // startup lain, habis itu berulang tiap CREATOR_WATCH_INTERVAL_MS.
+  if (fsDb) {
+    setTimeout(() => {
+      runCreatorWatchCheck().catch((e) => console.error('[creatorWatch] Error gak ketangkep:', e.message));
+      setInterval(() => {
+        runCreatorWatchCheck().catch((e) => console.error('[creatorWatch] Error gak ketangkep:', e.message));
+      }, CREATOR_WATCH_INTERVAL_MS);
+    }, 2 * 60 * 1000);
+    console.log(`[creatorWatch] Cron aktif, cek tiap ${CREATOR_WATCH_INTERVAL_MS / 60000} menit.`);
+  }
 });
