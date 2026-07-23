@@ -1456,11 +1456,33 @@ async function handleDownloadRequest(req, res) {
       : (ext === 'webm' ? 'video/webm' : ext === 'mkv' ? 'video/x-matroska' : 'video/mp4');
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Length', stat.size);
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Disposition', `${isPreview ? 'inline' : 'attachment'}; filename="${safeName}"`);
 
-    const stream = fs.createReadStream(filePath);
+    // Sebelumnya Accept-Ranges diiklanin tapi gak pernah beneran dilayani —
+    // selalu kirim 200 + file utuh biarpun browser/WebView minta Range.
+    // Ini bikin <video src="..."> buat preview gagal/hang di beberapa media
+    // pipeline (termasuk sebagian WebView), karena mereka ngirim Range
+    // request duluan buat mulai streaming dan nunggu 206 yang gak pernah
+    // datang. Sekarang beneran dilayani sebagai partial content.
+    const range = req.headers.range;
+    let start = 0, end = stat.size - 1;
+    if (range) {
+      const m = /bytes=(\d*)-(\d*)/.exec(range);
+      if (m) {
+        if (m[1]) start = parseInt(m[1], 10);
+        if (m[2]) end = parseInt(m[2], 10);
+      }
+      if (isNaN(start) || isNaN(end) || start > end || end >= stat.size) {
+        res.setHeader('Content-Range', `bytes */${stat.size}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+    }
+    res.setHeader('Content-Length', (end - start) + 1);
+
+    const stream = fs.createReadStream(filePath, range ? { start, end } : undefined);
     stream.pipe(res);
     stream.on('close', cleanup);
     stream.on('error', () => { cleanup(); if (!res.headersSent) res.status(500).end(); });
