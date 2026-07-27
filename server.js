@@ -2417,6 +2417,9 @@ app.get('/api/admin/creator-watch', requireAdminToken, requireFirebaseAdmin, asy
     res.status(500).json({ success: false, error: e.message });
   }
 });
+// ── Ninzy Ai — chat AI (tab bottom-nav ke-9) ───────────────────────────
+const ninzyAiRoute = require('./ninzyAiRoute');
+app.use('/api', ninzyAiRoute);
 
 app.listen(PORT, () => {
   console.log(`NinzyDownloader backend jalan di port ${PORT}`);
