@@ -4111,6 +4111,7 @@ function setProcessMode(mode) {
     mainBtn.style.background = 'linear-gradient(135deg,#f59e0b,#d97706)';
     mainBtn.style.boxShadow = '0 2px 8px rgba(245,158,11,.35)';
   }
+  if (typeof applyCompressButtonToggle === 'function') applyCompressButtonToggle();
 }
 
 function startMainFlow() {
@@ -4512,6 +4513,9 @@ async function boostVideo(item) {
 }
 
 function startCompressFlow() {
+  if (typeof _featureToggles !== 'undefined' && !_featureToggles.compress) {
+    toast('🗜️ Tombol kompres sementara dimatikan oleh admin', 'error'); return;
+  }
   if (files.length === 0) { toast('Tambahkan file video terlebih dahulu', 'error'); return; }
   if (isCompressing) { toast('Sedang memproses...', 'info'); return; }
   const pending = files.filter(f => f.status === 'wait' || f.status === 'error');
@@ -12708,6 +12712,10 @@ function downloadConv() {
         <div class="adminx-card-title">🎛️ Feature Toggles</div>
         <div class="adminx-info-box" style="margin-bottom:6px">Nyala/matikan fitur secara real-time untuk semua user, tanpa perlu deploy ulang.</div>
         <div class="adminx-switch-row">
+          <div><div class="adminx-switch-label">🗜️ Tombol Kompres Semua (Button 1)</div><div class="adminx-switch-desc">Matikan buat nonaktifkan sementara tombol kompres utama di actions bar halaman user</div></div>
+          <label class="adminx-switch"><input type="checkbox" id="ft-compress" checked onchange="adminxSaveFeatureToggles()"><span class="adminx-switch-track"></span></label>
+        </div>
+        <div class="adminx-switch-row">
           <div><div class="adminx-switch-label">💬 Chat Global</div><div class="adminx-switch-desc">Matikan kalau perlu moderasi darurat</div></div>
           <label class="adminx-switch"><input type="checkbox" id="ft-chat" checked onchange="adminxSaveFeatureToggles()"><span class="adminx-switch-track"></span></label>
         </div>
@@ -14645,6 +14653,7 @@ async function adminxSaveDiscount() {
 // ── FEATURE TOGGLES (real-time semua user) ──
 async function adminxSaveFeatureToggles() {
   const features = {
+    compress: document.getElementById('ft-compress').checked,
     chat: document.getElementById('ft-chat').checked,
     gacha: document.getElementById('ft-gacha').checked,
     register: document.getElementById('ft-register').checked,
@@ -14842,6 +14851,7 @@ async function adminxLoadSystemConfig() {
     const doc = await fdb.collection('adminSystem').doc('config').get();
     const c = doc.exists ? doc.data() : {};
     if (c.features) {
+      document.getElementById('ft-compress').checked = c.features.compress !== false;
       document.getElementById('ft-chat').checked = c.features.chat !== false;
       document.getElementById('ft-gacha').checked = c.features.gacha !== false;
       document.getElementById('ft-register').checked = c.features.register !== false;
@@ -15195,7 +15205,21 @@ async function adminxLoadSystemConfig() {
 })();
 
 // ── GLOBAL REAL-TIME WATCHER: Maintenance Mode & Feature Toggles untuk SEMUA USER ──
-let _featureToggles = { chat: true, gacha: true, register: true, premiumPurchase: true };
+let _featureToggles = { compress: true, chat: true, gacha: true, register: true, premiumPurchase: true };
+
+// Terapkan status aktif/nonaktif Tombol Kompres Semua (button 1 di actions bar)
+// ke tombol beneran di halaman. Dipanggil ulang tiap kali toggle admin berubah
+// ATAU tiap kali mode compress/boost di-switch, biar statusnya selalu sinkron.
+function applyCompressButtonToggle() {
+  const btn = document.getElementById('btn-compress');
+  if (!btn) return;
+  const isOff = typeof _featureToggles !== 'undefined' && !_featureToggles.compress
+    && typeof _processMode !== 'undefined' && _processMode === 'compress';
+  btn.disabled = isOff;
+  btn.style.opacity = isOff ? '.45' : '';
+  btn.style.pointerEvents = isOff ? 'none' : '';
+  btn.title = isOff ? 'Tombol kompres sementara dimatikan oleh admin' : '';
+}
 function adminxWatchSystemConfig() {
   try {
     fdb.collection('adminSystem').doc('config').onSnapshot(doc => {
@@ -15255,11 +15279,14 @@ function adminxWatchSystemConfig() {
       }
       if (c.features) {
         _featureToggles = {
+          compress: c.features.compress !== false,
           chat: c.features.chat !== false,
           gacha: c.features.gacha !== false,
           register: c.features.register !== false,
           premiumPurchase: c.features.premiumPurchase !== false
         };
+        // Tombol Kompres Semua (button 1 di actions bar)
+        applyCompressButtonToggle();
         // Tombol Chat Global
         const chatBtn = document.getElementById('btn-chat-hdr');
         if (chatBtn) chatBtn.style.display = _featureToggles.chat ? '' : 'none';
