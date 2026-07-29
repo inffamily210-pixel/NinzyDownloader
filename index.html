@@ -5510,13 +5510,23 @@ async function compressVideo(item) {
         ctx.fillStyle=grd; ctx.fillRect(0,0,w,h);
       }
 
-      let rafId=null, lastDrawTime=-1, recording=false;
+      let rafId=null, lastDrawCt=-1, recording=false;
+      const frameIntervalSec = frameInterval / 1000;
 
       function drawFrame(timestamp) {
         if (!recording) return;
         const ct = videoEl.currentTime;
-        if (timestamp-lastDrawTime < frameInterval-5) { rafId=requestAnimationFrame(drawFrame); return; }
-        lastDrawTime = timestamp;
+        // PENTING: throttle berdasarkan videoEl.currentTime (waktu video
+        // ASLI), bukan timestamp requestAnimationFrame (jam dinding browser).
+        // Kalau device lag/CPU throttle, rAF bisa telat dipanggil sementara
+        // videoEl.play() tetap jalan real-time -- kalau throttle-nya pakai
+        // timestamp rAF, canvas jadi nge-drop frame diam-diam dan
+        // rekaman jatuh di belakang video asli (keliatan kayak delay/FPS
+        // gak sesuai). Bandingkan ke currentTime video memastikan setiap
+        // frame yang digambar tetap representatif dari posisi video
+        // sebenarnya, walau ada rAF call yang ke-skip di tengah jalan.
+        if (lastDrawCt >= 0 && ct - lastDrawCt < frameIntervalSec - 0.005) { rafId=requestAnimationFrame(drawFrame); return; }
+        lastDrawCt = ct;
         if (ct >= trimEnd-0.05) { lastFrameTime = ct; stopRec(); return; }
         // Catat frame pertama dan terakhir yang benar-benar digambar
         if (firstFrameTime < 0) firstFrameTime = ct;
