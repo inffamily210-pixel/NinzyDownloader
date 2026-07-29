@@ -1015,6 +1015,8 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .bottom-nav-btn.active .bn-icon{transform:translateY(-1px) scale(1.08)}
 .bottom-nav-btn:not(.active):hover{color:var(--text);background:rgba(255,255,255,.05)}
 @media (prefers-reduced-motion:reduce){.bottom-nav-btn,.bottom-nav-btn .bn-icon{transition:none}}
+/* Dipakai buat tombol/menu manapun yang dimatikan admin lewat panel Feature Toggles */
+.ft-disabled{opacity:.4!important;pointer-events:none!important;filter:grayscale(.4)}
 /* Kasih ruang di bawah biar konten paling bawah gak ketutup bottom nav */
 body{padding-bottom:78px}
 </style>
@@ -10006,6 +10008,7 @@ function handleV2GFile(file) {
 }
 
 async function convertVideoToGIF() {
+  if (ftBlocked('btn_v2g', '🎞 Video → GIF')) return;
   if (!v2gFile) return;
   const btn = document.getElementById('v2g-btn');
   btn.disabled = true; btn.textContent = '⟳ Membuat GIF...';
@@ -10183,6 +10186,7 @@ function handleG2VFile(file) {
 }
 
 async function convertGIFToVideo() {
+  if (ftBlocked('btn_g2v', '🎥 GIF → Video')) return;
   if(!g2vFile) return;
   const btn=document.getElementById('g2v-btn');
   btn.disabled=true; btn.textContent='⟳ Mengkonversi...';
@@ -10256,6 +10260,7 @@ function handleAudFile(file) {
 }
 
 async function extractAudio() {
+  if (ftBlocked('btn_extract_audio', '🎵 Extract Audio → MP3')) return;
   if(!audFile) return;
   const btn=document.getElementById('aud-btn');
   btn.disabled=true; btn.textContent='⟳ Mengekstrak...';
@@ -11292,6 +11297,9 @@ function renderAITools() {
   });
   // Render music card
   renderAIMusicCard();
+  // Tombol AI baru aja dirender ulang — pastikan status aktif/nonaktif admin
+  // tetap kena, soalnya elemen-elemen ini tadi sempat hilang dari DOM.
+  if (typeof applyAllButtonToggles === 'function') applyAllButtonToggles();
 }
 
 // AI tool file storage
@@ -11335,6 +11343,7 @@ function dlAITool(id) {
 }
 
 async function doAIUpscale() {
+  if (ftBlocked('btn_ai_upscale', '🔭 AI Upscale Video')) return;
   const file = aiToolFiles['upscale'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const scale = parseFloat(document.getElementById('ai-upscale-scale').value) || 2;
@@ -11362,6 +11371,7 @@ async function doAIUpscale() {
 }
 
 async function doAIColorize() {
+  if (ftBlocked('btn_ai_colorize', '🎨 AI Colorize')) return;
   const file=aiToolFiles['colorize'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const style=document.getElementById('ai-colorize-style').value;
@@ -11393,6 +11403,7 @@ async function doAIColorize() {
 }
 
 function doAISubtitle2() {
+  if (ftBlocked('btn_ai_subtitle', '📝 AI Auto Subtitle')) return;
   const file=aiToolFiles['sub'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const lang=document.getElementById('ai-sub-lang').value;
@@ -11454,6 +11465,7 @@ function downloadSubtitleText(b64) {
 }
 
 function doAIThumbnail() {
+  if (ftBlocked('btn_ai_thumb', '🖼 AI Thumbnail Generator')) return;
   const file=aiToolFiles['thumb'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const t=parseFloat(document.getElementById('ai-thumb-time').value)||3;
@@ -11469,6 +11481,7 @@ function doAIThumbnail() {
 }
 
 async function doAIAutoTrim() {
+  if (ftBlocked('btn_ai_trim', '✂️ AI Auto Trim')) return;
   const file=aiToolFiles['trim'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const maxDur=parseInt(document.getElementById('ai-trim-dur').value)||60;
@@ -11498,6 +11511,7 @@ async function doAIAutoTrim() {
 }
 
 async function doAIShorts2() {
+  if (ftBlocked('btn_ai_shorts', '📱 AI Shorts Generator')) return;
   const file=aiToolFiles['shorts'];
   if(!file){ toast('Pilih video dulu!','error'); return; }
   const maxDur=parseInt(document.getElementById('ai-shorts-dur').value)||60;
@@ -11595,6 +11609,7 @@ function selectMusicGenre(el, genre) {
 }
 
 async function generateAIMusic() {
+  if (ftBlocked('btn_ai_music', '🎵 AI Teks → Musik')) return;
   if (!isPremium()) { openPremiumModal(); return; }
   const prompt = (document.getElementById('music-prompt').value || '').trim();
   const tempo = document.getElementById('music-tempo').value;
@@ -12142,6 +12157,7 @@ function handleConvFile(file) {
 }
 
 async function convertFormat() {
+  if (ftBlocked('btn_convert_format', '🔄 Convert Format Video')) return;
   if(!convFile) return;
   const btn=document.getElementById('conv-btn');
   btn.disabled=true; btn.textContent='⟳ Mengkonversi...';
@@ -12734,6 +12750,13 @@ function downloadConv() {
         <div class="adminx-switch-row">
           <div><div class="adminx-switch-label">📥 Downloader Video</div><div class="adminx-switch-desc">Matikan kalau server Railway lagi bermasalah/maintenance</div></div>
           <label class="adminx-switch"><input type="checkbox" id="ft-downloader" checked onchange="dlmonSaveConfig()"><span class="adminx-switch-track"></span></label>
+        </div>
+      </div>
+      <div class="adminx-card">
+        <div class="adminx-card-title">🧩 Toggle Semua Menu &amp; Tombol</div>
+        <div class="adminx-info-box" style="margin-bottom:6px">Nyala/matikan tiap menu navigasi bawah & tombol fitur satu-satu, real-time ke semua user. Kalau dimatikan, tombolnya jadi abu-abu dan gak bisa diklik user.</div>
+        <div id="ft-dynamic-list">
+          <div class="adminx-empty" style="font-size:11px">Memuat daftar tombol...</div>
         </div>
       </div>
       <div class="adminx-card">
@@ -14666,6 +14689,40 @@ async function adminxSaveFeatureToggles() {
   } catch(e) { adminxToast(`❌ Gagal: ${e.message||e}`); }
 }
 
+// Bangun (atau bangun ulang) daftar switch aktif/nonaktif buat SEMUA entry di
+// BTN_TOGGLE_DEFS, dikelompokkan per grup. Dipanggil tiap kali tab System
+// dibuka lewat adminxLoadSystemConfig(), supaya checkbox selalu sinkron
+// dengan yang tersimpan terakhir di Firestore.
+function renderBtnTogglesUI(saved) {
+  const wrap = document.getElementById('ft-dynamic-list');
+  if (!wrap) return;
+  saved = saved || {};
+  const groups = [];
+  const groupIndex = {};
+  BTN_TOGGLE_DEFS.forEach(def => {
+    if (!(def.group in groupIndex)) { groupIndex[def.group] = groups.length; groups.push({ name: def.group, items: [] }); }
+    groups[groupIndex[def.group]].items.push(def);
+  });
+  wrap.innerHTML = groups.map(g => `
+    <div style="font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:14px 0 4px">${g.name}</div>
+    ${g.items.map(def => `
+      <div class="adminx-switch-row">
+        <div><div class="adminx-switch-label">${def.label}</div><div class="adminx-switch-desc">${def.desc || ''}</div></div>
+        <label class="adminx-switch"><input type="checkbox" class="ft-dyn-check" data-key="${def.key}" ${saved[def.key] === false ? '' : 'checked'} onchange="adminxSaveBtnToggles()"><span class="adminx-switch-track"></span></label>
+      </div>`).join('')}
+  `).join('');
+}
+
+async function adminxSaveBtnToggles() {
+  const buttonToggles = {};
+  document.querySelectorAll('.ft-dyn-check').forEach(cb => { buttonToggles[cb.dataset.key] = cb.checked; });
+  try {
+    await fdb.collection('adminSystem').doc('config').set({ buttonToggles }, { merge: true });
+    await adminxLog('button-toggle', JSON.stringify(buttonToggles));
+    adminxToast('✓ Toggle tombol disimpan');
+  } catch(e) { adminxToast(`❌ Gagal: ${e.message||e}`); }
+}
+
 // ── DOWNLOADER MONITORING (backend Railway terpisah dari Firestore) ──
 const DL_PLATFORM_LIST = ['TikTok', 'YouTube', 'Instagram', 'Facebook', 'Twitter/X', 'Reddit', 'SoundCloud', 'Twitch', 'Pinterest'];
 
@@ -14857,6 +14914,7 @@ async function adminxLoadSystemConfig() {
       document.getElementById('ft-register').checked = c.features.register !== false;
       document.getElementById('ft-premium').checked = c.features.premiumPurchase !== false;
     }
+    renderBtnTogglesUI(c.buttonToggles);
     document.getElementById('sys-wa').value = c.waNumber || '';
     document.getElementById('sys-donasi').value = c.donasiLink || 'https://sociabuzz.com/kurumi_/tribe';
     document.getElementById('maint-active').checked = !!c.maintenanceMode;
@@ -15220,6 +15278,80 @@ function applyCompressButtonToggle() {
   btn.style.pointerEvents = isOff ? 'none' : '';
   btn.title = isOff ? 'Tombol kompres sementara dimatikan oleh admin' : '';
 }
+
+// ═══ TOGGLE AKTIF/NONAKTIF — SEMUA MENU & TOMBOL LAIN ═══
+// Sistem generik: satu array jadi sumber kebenaran (dipakai admin panel buat
+// generate switch, dipakai frontend buat nge-apply, dan dipakai guard klik).
+// Tambah fitur baru = tambah 1 baris di sini, gak perlu sentuh HTML/JS lain.
+const BTN_TOGGLE_DEFS = [
+  { key: 'nav_compress', group: '📌 Menu Navigasi Bawah', label: '🗜️ Menu Kompres (Beranda)', desc: 'Sembunyikan tab Kompres dari bottom nav', selector: '.bottom-nav-btn[data-section="compress"]' },
+  { key: 'nav_downloader', group: '📌 Menu Navigasi Bawah', label: '📥 Menu Downloader', desc: 'Sembunyikan tab Downloader dari bottom nav', selector: '.bottom-nav-btn[data-section="downloader"]' },
+  { key: 'nav_convert', group: '📌 Menu Navigasi Bawah', label: '🔄 Menu Convert', desc: 'Sembunyikan tab Convert dari bottom nav', selector: '.bottom-nav-btn[data-section="convert"]' },
+  { key: 'nav_ai', group: '📌 Menu Navigasi Bawah', label: '🤖 Menu AI Tools', desc: 'Sembunyikan tab AI Tools dari bottom nav', selector: '.bottom-nav-btn[data-section="ai"]' },
+  { key: 'nav_trading', group: '📌 Menu Navigasi Bawah', label: '📈 Menu Trading', desc: 'Sembunyikan tab Trading dari bottom nav', selector: '.bottom-nav-btn[data-section="trading"]' },
+  { key: 'nav_help', group: '📌 Menu Navigasi Bawah', label: '❓ Menu Bantuan', desc: 'Sembunyikan tab Bantuan dari bottom nav', selector: '.bottom-nav-btn[data-section="help"]' },
+  { key: 'nav_anime', group: '📌 Menu Navigasi Bawah', label: '🎌 Menu Anime', desc: 'Sembunyikan tab Anime dari bottom nav', selector: '.bottom-nav-btn[data-section="anime"]' },
+  { key: 'nav_streaming', group: '📌 Menu Navigasi Bawah', label: '🎬 Menu Streaming', desc: 'Sembunyikan tab Streaming dari bottom nav', selector: '.bottom-nav-btn[data-section="streaming"]' },
+  { key: 'nav_ninzyai', group: '📌 Menu Navigasi Bawah', label: '💬 Menu Ninzy Ai', desc: 'Sembunyikan tab Ninzy Ai dari bottom nav', selector: '.bottom-nav-btn[data-section="ninzyai"]' },
+
+  { key: 'btn_v2g', group: '🔄 Tombol Convert', label: '🎞 Video → GIF', desc: 'Matikan tombol "Buat GIF"', selector: '#v2g-btn' },
+  { key: 'btn_g2v', group: '🔄 Tombol Convert', label: '🎥 GIF → Video', desc: 'Matikan tombol "Buat Video"', selector: '#g2v-btn' },
+  { key: 'btn_extract_audio', group: '🔄 Tombol Convert', label: '🎵 Extract Audio → MP3', desc: 'Matikan tombol "Extract Audio"', selector: '#aud-btn' },
+  { key: 'btn_convert_format', group: '🔄 Tombol Convert', label: '🔄 Convert Format Video', desc: 'Matikan tombol "Convert Sekarang"', selector: '#conv-btn' },
+
+  { key: 'btn_ai_upscale', group: '🤖 Tombol AI Tools', label: '🔭 AI Upscale Video', desc: 'Matikan tombol "Upscale Sekarang"', selector: '#ai-upscale-btn' },
+  { key: 'btn_ai_colorize', group: '🤖 Tombol AI Tools', label: '🎨 AI Colorize', desc: 'Matikan tombol "Colorize"', selector: '#ai-colorize-btn' },
+  { key: 'btn_ai_subtitle', group: '🤖 Tombol AI Tools', label: '📝 AI Auto Subtitle', desc: 'Matikan tombol "Generate Subtitle"', selector: '#ai-sub-btn' },
+  { key: 'btn_ai_thumb', group: '🤖 Tombol AI Tools', label: '🖼 AI Thumbnail Generator', desc: 'Matikan tombol "Ambil Thumbnail"', selector: '#ai-thumb-btn' },
+  { key: 'btn_ai_trim', group: '🤖 Tombol AI Tools', label: '✂️ AI Auto Trim', desc: 'Matikan tombol "Auto Trim"', selector: '#ai-trim-btn' },
+  { key: 'btn_ai_shorts', group: '🤖 Tombol AI Tools', label: '📱 AI Shorts Generator', desc: 'Matikan tombol "Buat Shorts"', selector: '#ai-shorts-btn' },
+  { key: 'btn_ai_music', group: '🤖 Tombol AI Tools', label: '🎵 AI Teks → Musik', desc: 'Matikan tombol "Generate Musik"', selector: '#music-gen-btn' },
+
+  { key: 'btn_ninzyai_send', group: '💬 Lainnya', label: '💬 Kirim Chat Ninzy Ai', desc: 'Matikan tombol kirim di chat Ninzy Ai', selector: '#ninzyai-send-btn' },
+];
+let _btnToggles = {};
+
+// Terapkan status ke tombol beneran di halaman. Dipanggil ulang tiap kali
+// Firestore berubah, DAN dari tempat lain yang me-render ulang tombol secara
+// dinamis (mis. renderAITools), biar elemen yang baru dibikin tetap kena efek.
+function applyAllButtonToggles() {
+  BTN_TOGGLE_DEFS.forEach(def => {
+    const off = _btnToggles[def.key] === false;
+    document.querySelectorAll(def.selector).forEach(el => {
+      el.classList.toggle('ft-disabled', off);
+      el.title = off ? (def.label + ' sementara dimatikan oleh admin') : '';
+    });
+  });
+}
+
+// Guard ringan buat dipanggil di awal fungsi aksi masing-masing (lapisan kedua
+// selain guard klik di atas — jaga-jaga kalau fungsinya dipanggil langsung).
+function ftBlocked(key, label) {
+  if (typeof _btnToggles !== 'undefined' && _btnToggles[key] === false) {
+    if (typeof toast === 'function') toast((label || 'Fitur ini') + ' sementara dimatikan oleh admin', 'error');
+    return true;
+  }
+  return false;
+}
+
+// Guard terpusat: blokir klik ke tombol/menu manapun yang lagi dimatikan admin.
+// Dipasang di fase capture di document, jadi tetap berlaku walau tombolnya
+// baru dirender belakangan oleh JS (AI Tools, dll) — nggak perlu ubah tiap
+// fungsi onclick satu-satu.
+document.addEventListener('click', function(e) {
+  if (!BTN_TOGGLE_DEFS.length) return;
+  for (const def of BTN_TOGGLE_DEFS) {
+    if (_btnToggles[def.key] === false) {
+      const hit = e.target.closest(def.selector);
+      if (hit) {
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        if (typeof toast === 'function') toast(def.label + ' sementara dimatikan oleh admin', 'error');
+        return;
+      }
+    }
+  }
+}, true);
+
 function adminxWatchSystemConfig() {
   try {
     fdb.collection('adminSystem').doc('config').onSnapshot(doc => {
@@ -15306,6 +15438,9 @@ function adminxWatchSystemConfig() {
           else { b.style.opacity = ''; b.style.pointerEvents = ''; b.title = ''; }
         });
       }
+      // Semua toggle menu/tombol lain (nav bawah, convert, AI tools, dst)
+      _btnToggles = c.buttonToggles || {};
+      applyAllButtonToggles();
     });
   } catch(e) {}
 }
@@ -19075,6 +19210,7 @@ function ninzyAiKeyDown(e) {
 }
 
 async function ninzyAiSend() {
+  if (ftBlocked('btn_ninzyai_send', '💬 Kirim Chat Ninzy Ai')) return;
   if (ninzyAiBusy) return;
   const input = document.getElementById('ninzyai-input');
   const btn = document.getElementById('ninzyai-send-btn');
