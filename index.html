@@ -15322,6 +15322,29 @@ function applyAllButtonToggles() {
       el.title = off ? (def.label + ' sementara dimatikan oleh admin') : '';
     });
   });
+  ftRedirectIfActiveSectionDisabled();
+}
+
+// PENTING: mematikan tombol menu nav aja gak cukup — section "compress" itu
+// default aktif dari HTML-nya (class="main-section active"), jadi kalau nav-nya
+// dimatikan tapi user pas lagi/baru di situ, section-nya tetap kebuka penuh dan
+// SEMUA tombol di dalamnya tetap kepake. Fungsi ini mindahin user ke section lain
+// yang masih nyala tiap kali section yang lagi aktif ternyata nav-nya off —
+// baik pas baru load maupun pas toggle-nya diubah admin real-time.
+function ftRedirectIfActiveSectionDisabled() {
+  const navDefs = BTN_TOGGLE_DEFS.filter(d => d.key.indexOf('nav_') === 0);
+  const activeEl = document.querySelector('.main-section.active');
+  if (!activeEl) return;
+  const activeName = activeEl.dataset.section;
+  const activeDef = navDefs.find(d => d.selector.indexOf('"' + activeName + '"') !== -1);
+  if (!activeDef || _btnToggles[activeDef.key] !== false) return; // section aktif masih nyala, aman
+  const fallback = navDefs.find(d => _btnToggles[d.key] !== false);
+  if (!fallback) return; // semua menu dimatikan admin, gak ada tempat buat lari — biarin
+  const m = fallback.selector.match(/data-section="([^"]+)"/);
+  if (!m) return;
+  const fallbackName = m[1];
+  const fallbackBtn = document.querySelector('.bottom-nav-btn[data-section="' + fallbackName + '"]');
+  if (typeof switchMainSection === 'function') switchMainSection(fallbackName, fallbackBtn);
 }
 
 // Guard ringan buat dipanggil di awal fungsi aksi masing-masing (lapisan kedua
