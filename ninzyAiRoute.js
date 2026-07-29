@@ -63,7 +63,7 @@ function isRateLimited(ip) {
 
 router.post('/ninzy-ai/chat', async (req, res) => {
   try {
-    if (xai-Oaw32izO2mTwnA0ddzn47VWsizbQYJfdkL7xFsuLPryPUONdtLr1OiBMgbeWiDmM2sOz2EmFHObIFMCG) {
+    if (!XAI_API_KEY) {
       console.error('[Ninzy Ai] XAI_API_KEY belum di-set di environment variables.');
       return res.status(500).json({ success: false, error: 'Ninzy Ai belum dikonfigurasi di server.' });
     }
