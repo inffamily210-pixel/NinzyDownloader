@@ -5511,21 +5511,21 @@ async function compressVideo(item) {
       }
 
       let rafId=null, lastDrawCt=-1, recording=false;
-      const frameIntervalSec = frameInterval / 1000;
 
       function drawFrame(timestamp) {
         if (!recording) return;
         const ct = videoEl.currentTime;
-        // PENTING: throttle berdasarkan videoEl.currentTime (waktu video
-        // ASLI), bukan timestamp requestAnimationFrame (jam dinding browser).
-        // Kalau device lag/CPU throttle, rAF bisa telat dipanggil sementara
-        // videoEl.play() tetap jalan real-time -- kalau throttle-nya pakai
-        // timestamp rAF, canvas jadi nge-drop frame diam-diam dan
-        // rekaman jatuh di belakang video asli (keliatan kayak delay/FPS
-        // gak sesuai). Bandingkan ke currentTime video memastikan setiap
-        // frame yang digambar tetap representatif dari posisi video
-        // sebenarnya, walau ada rAF call yang ke-skip di tengah jalan.
-        if (lastDrawCt >= 0 && ct - lastDrawCt < frameIntervalSec - 0.005) { rafId=requestAnimationFrame(drawFrame); return; }
+        // PENTING: canvas digambar SETIAP rAF tick (idealnya ~60fps refresh
+        // browser), TIDAK di-throttle ke targetFPS di sini. canvas.captureStream
+        // (targetFPS) yang sudah bertugas ngambil snapshot di interval sesuai
+        // targetFPS secara independen -- kalau drawFrame juga di-throttle ke
+        // targetFPS yang SAMA, canvas jadi jarang berubah, dan banyak snapshot
+        // captureStream berturut-turut identik (encoder bisa "menghemat" ini
+        // jadi sangat sedikit frame unik -- inilah sumber gejala video
+        // patah-patah/delay drastis). Cukup skip re-draw kalau currentTime
+        // belum maju sama sekali (video paused/stalled), bukan berdasar
+        // frameInterval.
+        if (ct === lastDrawCt) { rafId=requestAnimationFrame(drawFrame); return; }
         lastDrawCt = ct;
         if (ct >= trimEnd-0.05) { lastFrameTime = ct; stopRec(); return; }
         // Catat frame pertama dan terakhir yang benar-benar digambar
@@ -5713,7 +5713,7 @@ async function _doDownload(item, idx) {
   const safeName = item.file.name.replace(/[^a-zA-Z0-9_\-\.]/g,'_').replace(/\.[^.]+$/, '');
   const filename = useRename
     ? `ninzy_output_${String(idx+1).padStart(3,'0')}.${ext}`
-    : `compressed_${safeName}.${ext}`;
+    : `NinzyCompress_${safeName}.${ext}`;
 
   // Kalau user sudah setel folder "Ninzy Compressed" (lihat setupAutoSaveFolder),
   // coba simpan langsung ke situ dulu — tanpa dialog Save As berulang.
@@ -9400,7 +9400,7 @@ async function shareSingle(id) {
   if (!item || !item.compressedBlob) { toast('File belum selesai dikompres', 'error'); return; }
   const ext = item.outputExt || 'webm';
   const safeName = item.file.name.replace(/[^a-zA-Z0-9_\-\.]/g, '_').replace(/\.[^.]+$/, '');
-  const filename = `compressed_${safeName}.${ext}`;
+  const filename = `NinzyCompress_${safeName}.${ext}`;
   const shareFile = new File([item.compressedBlob], filename, { type: item.compressedBlob.type || 'video/webm' });
   if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
     try {
