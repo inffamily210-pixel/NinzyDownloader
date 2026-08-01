@@ -82,6 +82,39 @@ process.on('unhandledRejection', (reason) => {
   // biar request/platform lain yang lagi diproses gak ikut mati.
 });
 
+// ── Log buffer in-memory (buat Log Viewer di Admin Panel) ──────────────
+// BEDA dari requestLogBuffer (structured per-request log, di bawah) --
+// ini nangkep RAW console.log/error/warn apa aja yang dipanggil di
+// manapun di kode, termasuk error tak terduga dari uncaughtException/
+// unhandledRejection di atas yang gak akan pernah masuk ke
+// requestLogBuffer (itu cuma nyatet hasil request yang SELESAI diproses,
+// bukan crash mendadak). Dua sistem ini saling melengkapi, bukan duplikat.
+const CONSOLE_LOG_BUFFER_MAX = 300;
+const logBuffer = [];
+
+function pushLogBuffer(level, args) {
+  try {
+    const msg = args.map(a => {
+      if (a instanceof Error) return a.stack || a.message;
+      if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
+      return String(a);
+    }).join(' ');
+    logBuffer.push({ level, msg, ts: Date.now() });
+    if (logBuffer.length > CONSOLE_LOG_BUFFER_MAX) logBuffer.shift();
+  } catch (e) { /* jangan sampai logging sendiri yang bikin crash */ }
+}
+
+// Intercept console.log/error/warn: tetap jalan normal ke stdout/stderr
+// (Railway Deploy Logs gak kepengaruh sama sekali), TAPI sekarang juga
+// ke-salin ke logBuffer di atas.
+['log', 'error', 'warn'].forEach(level => {
+  const orig = console[level].bind(console);
+  console[level] = (...args) => {
+    orig(...args);
+    pushLogBuffer(level, args);
+  };
+});
+
 // ── CORS ──────────────────────────────────────────────────────────────────
 // Ganti '*' dengan domain Vercel NinzyCompress kamu kalau mau lebih aman,
 // misal: ['https://ninzycompress.vercel.app']
@@ -1654,6 +1687,22 @@ app.post('/api/admin/verify-pin', adminPinRateLimit, (req, res) => {
 app.post('/api/admin/verify-token', (req, res) => {
   const { token } = req.body || {};
   res.json({ success: verifyAdminToken(token) });
+});
+
+// ── Log Viewer (Admin Panel) ────────────────────────────────────────────
+// Ambil isi logBuffer in-memory. Query param ?level=error buat filter
+// cuma level tertentu (log/error/warn), atau kosongkan buat semua.
+// Dilindungi requireAdminToken -- sama kayak endpoint sensitif lain,
+// karena log server bisa aja bocorin info internal (path file, dll).
+app.get('/api/admin/logs', requireAdminToken, (req, res) => {
+  const level = req.query.level;
+  const filtered = level ? logBuffer.filter(l => l.level === level) : logBuffer;
+  res.json({ success: true, logs: filtered.slice().reverse(), total: logBuffer.length });
+});
+
+app.post('/api/admin/logs/clear', requireAdminToken, (req, res) => {
+  logBuffer.length = 0;
+  res.json({ success: true });
 });
 
 // ── Kode Aktivasi Premium (activationCodes collection) ────────────────────

@@ -5452,7 +5452,12 @@ async function compressVideo(item) {
             const sv = parseFloat(localStorage.getItem('ninzy_comp_saved')||'0') + Math.max(0, item.file.size - finalBlob.size);
             localStorage.setItem('ninzy_comp_count', c);
             localStorage.setItem('ninzy_comp_saved', sv);
-            compAddHistory({ name: item.file.name, originalSize: item.file.size, compressedSize: finalBlob.size, ext: item.outputExt || 'webm' });
+            const histId = 'ch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+            compAddHistory({ id: histId, name: item.file.name, originalSize: item.file.size, compressedSize: finalBlob.size, ext: item.outputExt || 'webm' });
+            // Simpan blob-nya ke IndexedDB (bukan localStorage -- blob video
+            // terlalu besar buat localStorage) supaya bisa di-re-download
+            // nanti dari riwayat tanpa perlu proses ulang dari awal.
+            compSaveBlobToDB(histId, finalBlob).catch(e => console.warn('[compSaveBlobToDB]', e));
             if (typeof ninzyAddExp === 'function') ninzyAddExp(10);
           }
           cleanup();
@@ -9342,6 +9347,83 @@ function dlClearHistory() {
 
 // ═══ RIWAYAT KOMPRESI (lokal per browser, sama pola kayak dlHistory) ═══
 const COMP_HISTORY_MAX = 20;
+// ═══ PENYIMPANAN BLOB VIDEO (IndexedDB, buat re-download dari riwayat) ═══
+// Kenapa IndexedDB, bukan localStorage: localStorage cuma bisa nyimpen
+// string (biasanya dibatasi ~5-10MB total per origin), gak cukup buat
+// nyimpen blob video yang bisa berukuran puluhan-ratusan MB per file.
+// IndexedDB didesain buat data biner besar kayak gini.
+const COMP_DB_NAME = 'ninzy_comp_blobs';
+const COMP_DB_STORE = 'blobs';
+
+function compOpenDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(COMP_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(COMP_DB_STORE)) {
+        req.result.createObjectStore(COMP_DB_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function compSaveBlobToDB(id, blob) {
+  const db = await compOpenDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(COMP_DB_STORE, 'readwrite');
+    tx.objectStore(COMP_DB_STORE).put(blob, id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function compGetBlobFromDB(id) {
+  const db = await compOpenDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(COMP_DB_STORE, 'readonly');
+    const req = tx.objectStore(COMP_DB_STORE).get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function compDeleteBlobFromDB(id) {
+  const db = await compOpenDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(COMP_DB_STORE, 'readwrite');
+    tx.objectStore(COMP_DB_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve(); // gagal hapus bukan hal fatal, lanjut aja
+  });
+}
+
+// Re-download dari riwayat: ambil blob dari IndexedDB, bikin link download
+// sementara. Kalau blobnya udah gak ada (misal history-nya dari sebelum
+// fitur ini ada, atau ke-prune), kasih tau user dengan jelas.
+async function compRedownloadFromHistory(histId, filename) {
+  const btn = event && event.target ? event.target.closest('button') : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const blob = await compGetBlobFromDB(histId);
+    if (!blob) {
+      toast('File ini gak tersimpan lagi (riwayat lama atau storage penuh). Kompres ulang ya.', 'error');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Mengunduh dari riwayat...', 'success');
+  } catch (e) {
+    console.error('[compRedownloadFromHistory]', e);
+    toast('Gagal ambil file dari riwayat', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⬇️'; }
+  }
+}
+
 function compHistoryKey() {
   try {
     const s = getSession();
@@ -9363,7 +9445,9 @@ function compGetHistory() {
   catch (e) { return []; }
 }
 function compClearHistory() {
+  const ids = compGetHistory().map(h => h.id).filter(Boolean);
   try { localStorage.removeItem(compHistoryKey()); } catch (e) {}
+  ids.forEach(id => compDeleteBlobFromDB(id));
   compRenderHistory();
   toast('Riwayat kompresi dihapus', 'success');
 }
@@ -9384,12 +9468,14 @@ function compRenderHistory() {
   listEl.innerHTML = history.map(h => {
     const saved = h.originalSize > 0 ? Math.round((1 - h.compressedSize / h.originalSize) * 100) : 0;
     const date = new Date(h.ts).toLocaleString('id-ID', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+    const outName = `NinzyCompress_${(h.name||'video').replace(/[^a-zA-Z0-9_\-\.]/g,'_').replace(/\.[^.]+$/,'')}.${h.ext||'webm'}`;
     return `<div style="display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);align-items:center">
       <span style="font-size:18px;flex-shrink:0">🎬</span>
       <div style="flex:1;min-width:0">
         <div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h.name}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px">${formatSize(h.originalSize)} → ${formatSize(h.compressedSize)} · hemat ${saved}% · ${date}</div>
       </div>
+      ${h.id ? `<button onclick="compRedownloadFromHistory('${h.id}','${outName.replace(/'/g,"\\'")}')" style="flex-shrink:0;background:var(--accent);color:#fff;border:none;border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer">⬇️</button>` : ''}
     </div>`;
   }).join('');
 }
@@ -12314,6 +12400,7 @@ function downloadConv() {
       <button class="adminx-maintab" onclick="adminxMainTab(this,'payment')">💳 Payment & Revenue</button>
       <button class="adminx-maintab" onclick="adminxMainTab(this,'monitor')">📊 Monitoring</button>
       <button class="adminx-maintab" onclick="adminxMainTab(this,'security')">🛡️ Moderasi & Keamanan</button>
+      <button class="adminx-maintab" onclick="adminxMainTab(this,'bugreports')" id="tab-bugreports">🐞 Laporan User</button>
       <button class="adminx-maintab" onclick="adminxMainTab(this,'promo')">🎟️ Coupon & Discount</button>
       <button class="adminx-maintab" onclick="adminxMainTab(this,'announce')">📢 Pengumuman</button>
       <button class="adminx-maintab" onclick="adminxMainTab(this,'system')">⚙️ System & Maintenance</button>
@@ -12628,6 +12715,17 @@ function downloadConv() {
         <button class="adminx-mini-btn" style="width:100%;margin-bottom:10px" onclick="dlmonLoadLogs()">🔄 Muat Log Terbaru</button>
         <div id="dlmon-logs" class="adminx-empty">Klik tombol di atas buat muat log</div>
       </div>
+
+      <div class="adminx-card">
+        <div class="adminx-card-title">🖥️ Server — Console Log & Crash</div>
+        <div class="adminx-info-box" style="margin-bottom:12px">Semua console.log/error/warn mentah dari server, termasuk crash tak terduga (uncaughtException/unhandledRejection) yang gak kecatet di Live Log di atas. Berguna kalau ada error 500 yang gak jelas penyebabnya.</div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button class="adminx-mini-btn" style="flex:1" onclick="sysmonLoadConsoleLogs()">🔄 Muat</button>
+          <button class="adminx-mini-btn" style="flex:1" onclick="sysmonLoadConsoleLogs('error')">⚠️ Cuma Error</button>
+          <button class="adminx-mini-btn" style="flex:0 0 auto" onclick="sysmonClearConsoleLogs()">🗑️</button>
+        </div>
+        <div id="sysmon-console-logs" class="adminx-empty">Klik Muat buat lihat log</div>
+      </div>
     </div><!-- /adminx-tab-monitor -->
 
     <!-- ═══ TAB: PENGUMUMAN ═══ -->
@@ -12703,6 +12801,19 @@ function downloadConv() {
         <button class="adminx-mini-btn" style="width:100%;margin-top:10px" onclick="adminxLoadAuditLogs()">🔄 Muat Log</button>
       </div>
     </div><!-- /adminx-tab-security -->
+
+    <div class="adminx-tabpanel" id="adminx-tab-bugreports">
+      <div class="adminx-card">
+        <div class="adminx-card-title">🐞 Laporan Masalah dari User</div>
+        <div class="adminx-info-box" style="margin-bottom:10px">Laporan yang dikirim user lewat tombol "Lapor Masalah / Debug Log" di profil mereka. Tetap juga masuk WhatsApp seperti biasa -- ini cuma biar bisa dilihat & dikelola langsung dari sini juga, gak perlu scroll WA.</div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button class="adminx-mini-btn" style="flex:1" onclick="adminxLoadBugReports('open')">📬 Belum Selesai</button>
+          <button class="adminx-mini-btn" style="flex:1" onclick="adminxLoadBugReports('resolved')">✅ Selesai</button>
+          <button class="adminx-mini-btn" style="flex:1" onclick="adminxLoadBugReports('all')">🗂️ Semua</button>
+        </div>
+        <div id="adminx-bugreports-list"><div class="adminx-empty" style="font-size:11px">Klik salah satu tombol di atas buat muat laporan</div></div>
+      </div>
+    </div><!-- /adminx-tab-bugreports -->
 
     <div class="adminx-tabpanel" id="adminx-tab-promo">
       <div class="adminx-card">
@@ -14357,6 +14468,7 @@ function adminxMainTab(el, key) {
   if (key === 'smartalert') { adminxLoadAlertConfig(); adminxLoadAlertHistory(); }
   if (key === 'churnradar') { adminxLoadChurnCounts(); adminxLoadChurn(7); }
   if (key === 'apiaccess') adminxLoadApiAccess();
+  if (key === 'bugreports') adminxLoadBugReports();
   if (key === 'debuglog') { if (typeof window.ninzyDebugFlush === 'function') window.ninzyDebugFlush(); }
 }
 
@@ -14633,6 +14745,52 @@ async function adminxLoadAuditLogs() {
   } catch(e) { el.innerHTML = `<div class="adminx-warn-box" style="font-size:11px">⚠️ Gagal muat: ${e.message||e}</div>`; }
 }
 
+// ── BUG REPORTS (dari sendDebugReportToAdmin, tersimpan paralel ke WA) ──
+async function adminxLoadBugReports(filter) {
+  const el = document.getElementById('adminx-bugreports-list');
+  if (!el) return;
+  el.innerHTML = '<div class="adminx-empty" style="font-size:11px">⏳ Memuat...</div>';
+  try {
+    let query = fdb.collection('bugReports').orderBy('createdAt', 'desc').limit(50);
+    if (filter === 'open' || filter === 'resolved') query = query.where('status', '==', filter);
+    const snap = await query.get();
+    if (snap.empty) { el.innerHTML = `<div class="adminx-empty" style="font-size:11px">Gak ada laporan${filter === 'open' ? ' yang belum selesai' : filter === 'resolved' ? ' yang udah selesai' : ''}</div>`; return; }
+    let html = '';
+    snap.forEach(d => {
+      const r = d.data();
+      const isOpen = r.status !== 'resolved';
+      html += `<div class="adminx-list-item">
+        <div class="adminx-list-top">
+          <div class="adminx-list-name">${animeEsc(r.name || 'User')} ${r.email ? '· ' + animeEsc(r.email) : ''}</div>
+          <span class="adminx-badge-sm ${isOpen ? 'adminx-badge-pending' : 'adminx-badge-approved'}">${isOpen ? 'Belum Selesai' : 'Selesai'}</span>
+        </div>
+        <div class="adminx-list-sub">${animeEsc(r.url || '')} · ${new Date(r.createdAt).toLocaleString('id-ID')}</div>
+        <details style="margin-top:6px">
+          <summary style="font-size:11px;color:var(--accent);cursor:pointer">Lihat log error</summary>
+          <pre style="font-size:10px;white-space:pre-wrap;word-break:break-word;margin-top:6px;padding:8px;background:var(--bg);border-radius:6px;max-height:200px;overflow-y:auto">${animeEsc(r.logText || '(kosong)')}</pre>
+        </details>
+        ${isOpen ? `<button class="adminx-mini-btn success" style="margin-top:8px" onclick="adminxResolveBugReport('${d.id}', this)">✓ Tandai Selesai</button>` : ''}
+      </div>`;
+    });
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = `<div class="adminx-warn-box" style="font-size:11px">⚠️ Gagal muat: ${e.message||e}</div>`; }
+}
+
+async function adminxResolveBugReport(reportId, btnEl) {
+  try {
+    await fdb.collection('bugReports').doc(reportId).update({ status: 'resolved', resolvedAt: Date.now() });
+    if (btnEl) {
+      const item = btnEl.closest('.adminx-list-item');
+      const badge = item && item.querySelector('.adminx-badge-sm');
+      if (badge) { badge.textContent = 'Selesai'; badge.className = 'adminx-badge-sm adminx-badge-approved'; }
+      btnEl.remove();
+    }
+    toast('Laporan ditandai selesai', 'success');
+  } catch (e) {
+    toast('Gagal update: ' + (e.message || e), 'error');
+  }
+}
+
 // ── COUPON MANAGEMENT ──
 async function adminxAddCoupon() {
   const code = (document.getElementById('cp-code').value||'').trim().toUpperCase();
@@ -14862,6 +15020,46 @@ async function dlmonLoadLogs() {
     }).join('');
   } catch (e) {
     wrap.innerHTML = `<div class="adminx-empty">❌ Gagal muat log: ${dlEsc(e.message || String(e))}</div>`;
+  }
+}
+
+// ── Console Log & Crash Viewer (raw console.log/error/warn dari server,
+// termasuk uncaughtException/unhandledRejection) — BEDA dari Live Log di
+// atas yang cuma nyatet request yang SELESAI diproses.
+async function sysmonLoadConsoleLogs(levelFilter) {
+  const wrap = document.getElementById('sysmon-console-logs');
+  wrap.innerHTML = '<div class="adminx-empty">⏳ Memuat...</div>';
+  try {
+    const qs = levelFilter ? '?level=' + encodeURIComponent(levelFilter) : '';
+    const data = await dlAdminFetch('/api/admin/logs' + qs, null, 'GET');
+    if (!data.logs || !data.logs.length) {
+      wrap.innerHTML = '<div class="adminx-empty">Belum ada log tercatat sejak server terakhir nyala</div>';
+      return;
+    }
+    const levelColor = { error: '#ef4444', warn: '#f59e0b', log: 'var(--text-secondary,#888)' };
+    wrap.innerHTML = data.logs.map(l => {
+      const time = new Date(l.ts).toLocaleTimeString('id-ID');
+      return `<div style="font-size:11px;padding:6px 0;border-bottom:1px solid var(--border);font-family:var(--mono)">
+        <div style="display:flex;gap:6px;color:${levelColor[l.level] || '#888'}">
+          <span style="flex-shrink:0">${time}</span>
+          <span style="flex-shrink:0;text-transform:uppercase;font-weight:700">${l.level}</span>
+        </div>
+        <div style="margin-top:2px;white-space:pre-wrap;word-break:break-word;color:var(--text)">${dlEsc(l.msg)}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    wrap.innerHTML = `<div class="adminx-empty">❌ Gagal muat log: ${dlEsc(e.message || String(e))}</div>`;
+  }
+}
+
+async function sysmonClearConsoleLogs() {
+  if (!confirm('Hapus semua console log yang tersimpan di server?')) return;
+  try {
+    await dlAdminFetch('/api/admin/logs/clear', null, 'POST');
+    toast('Log server dihapus', 'success');
+    sysmonLoadConsoleLogs();
+  } catch (e) {
+    toast('Gagal hapus log: ' + (e.message || e), 'error');
   }
 }
 
@@ -16029,6 +16227,22 @@ async function sendDebugReportToAdmin() {
       body: form
     });
     const data = await res.json();
+
+    // Simpan juga ke Firestore (BUKAN gantiin WA -- WA tetap notifikasi
+    // real-time yang berguna). Ini yang bikin laporan bisa dilihat & dikelola
+    // dari Admin Panel (tab Laporan User), bukan cuma nunggu di WA doang.
+    try {
+      await fdb.collection('bugReports').add({
+        name: session ? session.name : '(belum login)',
+        email: session ? session.email : '',
+        url: location.href,
+        userAgent: navigator.userAgent,
+        logText,
+        status: 'open',
+        createdAt: Date.now()
+      });
+    } catch (e) { console.warn('[bugReports save]', e); }
+
     if (data && (data.status === true || data.status === 'true')) {
       statusEl.style.color = 'var(--green)';
       statusEl.textContent = '✅ Laporan terkirim ke admin. Terima kasih!';
