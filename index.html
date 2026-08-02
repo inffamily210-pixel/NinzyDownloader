@@ -7968,6 +7968,104 @@ function ninzyRenderAchievements(containerId) {
 
 // EXP didapat dari: kompresi file, kirim komentar, kirim review, nonton
 // episode. Level makin tinggi butuh EXP makin banyak (formula pangkat).
+// ═══ EXPORT / IMPORT DATA PRIBADI (orisinal NinzyCompress) ═══
+// Ngumpulin semua data localStorage yang terkait 1 akun jadi satu file
+// JSON -- buat backup atau pindah device. SENGAJA cuma data localStorage
+// (bukan data yang udah sinkron ke Firestore kayak score/premium), karena
+// itu udah otomatis ngikut akun begitu login di device manapun.
+function ninzyCollectExportData() {
+  return {
+    _meta: { app: 'NinzyCompress', exportedAt: Date.now(), version: 1 },
+    streaming: {
+      watchlistStatus: streamGetList(),
+      progress: streamGetProgress(),
+      continueWatching: streamGetContinueList(),
+      customLists: streamGetCustomLists(),
+      followedAnime: ninzyGetFollowed(),
+      episodeKeys: (function () { try { return JSON.parse(localStorage.getItem(streamKeysStorageKey()) || 'null'); } catch (e) { return null; } })()
+    },
+    profile: {
+      levelExp: ninzyGetTotalExp(),
+      streak: ninzyGetStreak(),
+      achievements: ninzyGetUnlocked(),
+      commentHistory: ninzyGetCommentHistory(),
+      counters: {
+        comment: ninzyGetCounter('comment'),
+        review: ninzyGetCounter('review')
+      }
+    },
+    compression: {
+      history: compGetHistory()
+      // Blob video-nya SENGAJA gak diikutin -- file backup jadi gak
+      // membengkak (video bisa ratusan MB), dan blob itu spesifik ke
+      // device (IndexedDB), bukan sesuatu yang praktis dipindah device.
+      // Metadata riwayat tetap kebawa, cuma tombol re-download-nya gak
+      // akan aktif di device baru buat entri lama.
+    }
+  };
+}
+
+function ninzyExportData() {
+  const data = ninzyCollectExportData();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const me = gchatGetIdentity();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `NinzyCompress-backup-${(me.email || 'guest').split('@')[0]}-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Data berhasil di-export!', 'success');
+}
+
+function ninzyTriggerImportFile() {
+  const input = document.getElementById('ninzy-import-file-input');
+  if (input) input.click();
+}
+
+async function ninzyImportData(fileInput) {
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (!data._meta || data._meta.app !== 'NinzyCompress') {
+      toast('File ini bukan file backup NinzyCompress yang valid', 'error');
+      return;
+    }
+    if (!confirm('Import data ini bakal TIMPA data yang ada sekarang di device ini (watchlist, progress, level, dll). Lanjut?')) return;
+
+    if (data.streaming) {
+      if (data.streaming.watchlistStatus) localStorage.setItem(_streamUserKey('ninzy_stream_list_'), JSON.stringify(data.streaming.watchlistStatus));
+      if (data.streaming.progress) localStorage.setItem(_streamUserKey('ninzy_stream_progress_'), JSON.stringify(data.streaming.progress));
+      if (data.streaming.continueWatching) localStorage.setItem(_streamUserKey('ninzy_stream_continue_'), JSON.stringify(data.streaming.continueWatching));
+      if (data.streaming.customLists) localStorage.setItem(_streamCustomKey(), JSON.stringify(data.streaming.customLists));
+      if (data.streaming.followedAnime) localStorage.setItem(ninzyFollowKey(), JSON.stringify(data.streaming.followedAnime));
+      if (data.streaming.episodeKeys) localStorage.setItem(streamKeysStorageKey(), JSON.stringify(data.streaming.episodeKeys));
+    }
+    if (data.profile) {
+      if (typeof data.profile.levelExp === 'number') localStorage.setItem(ninzyLevelExpKey(), String(data.profile.levelExp));
+      if (data.profile.streak) localStorage.setItem(ninzyStreakKey(), JSON.stringify(data.profile.streak));
+      if (Array.isArray(data.profile.achievements)) localStorage.setItem(ninzyUnlockedKey(), JSON.stringify(data.profile.achievements));
+      if (Array.isArray(data.profile.commentHistory)) localStorage.setItem(ninzyCommentHistoryKey(), JSON.stringify(data.profile.commentHistory));
+      if (data.profile.counters) {
+        if (typeof data.profile.counters.comment === 'number') localStorage.setItem(ninzyCounterKey('comment'), String(data.profile.counters.comment));
+        if (typeof data.profile.counters.review === 'number') localStorage.setItem(ninzyCounterKey('review'), String(data.profile.counters.review));
+      }
+    }
+    if (data.compression && Array.isArray(data.compression.history)) {
+      localStorage.setItem(compHistoryKey(), JSON.stringify(data.compression.history));
+    }
+
+    toast('Data berhasil di-import! Memuat ulang halaman...', 'success');
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    console.error('[ninzyImportData]', e);
+    toast('Gagal import: file rusak atau formatnya salah', 'error');
+  } finally {
+    fileInput.value = '';
+  }
+}
+
 function ninzyLevelExpKey() {
   const me = gchatGetIdentity();
   return 'ninzy_level_exp_' + (me.email || me.uid || 'guest');
@@ -9951,6 +10049,9 @@ function openProfileModal() {
       <button class="profile-action-btn" onclick="closeModal('profile-modal');openRankModal()" style="border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.04)"><span class="icon">🏆</span><span>Lihat Rank Global</span><span class="arrow">›</span></button>
       <button class="profile-action-btn" onclick="closeModal('profile-modal');openDebugReportModal()" style="border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.04)"><span class="icon">🐞</span><span>Lapor Masalah / Debug Log</span><span class="arrow">›</span></button>
       <button class="profile-action-btn" onclick="closeModal('profile-modal');openPushModal()" style="border-color:rgba(91,110,245,.35);background:rgba(91,110,245,.04)"><span class="icon">🔔</span><span>Notifikasi Push</span><span class="arrow">›</span></button>
+      <button class="profile-action-btn" onclick="ninzyExportData()" style="border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.04)"><span class="icon">📦</span><span>Export Data (Backup)</span><span class="arrow">›</span></button>
+      <button class="profile-action-btn" onclick="ninzyTriggerImportFile()" style="border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.04)"><span class="icon">📥</span><span>Import Data (Restore)</span><span class="arrow">›</span></button>
+      <input type="file" id="ninzy-import-file-input" accept="application/json" style="display:none" onchange="ninzyImportData(this)">
     </div>
     ${prem ? `
     <div class="premium-countdown-box" id="prem-countdown-box">
