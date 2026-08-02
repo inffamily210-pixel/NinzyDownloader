@@ -1859,6 +1859,18 @@ body{padding-bottom:78px}
         <div id="dl-preview-wrap" style="display:none;margin-top:10px;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:16/9">
           <video id="dl-preview-video" controls playsinline style="width:100%;height:100%;display:block"></video>
         </div>
+        <div id="dl-preview-controls" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:14px;flex-shrink:0">🔊</span>
+            <input type="range" id="dl-preview-volume" min="0" max="100" value="100" style="flex:1;accent-color:var(--accent)" oninput="dlPreviewSetVolume(this.value)">
+            <span id="dl-preview-volume-label" style="font-size:10px;color:var(--muted);width:32px;text-align:right;flex-shrink:0">100%</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:14px;flex-shrink:0">☀️</span>
+            <input type="range" id="dl-preview-brightness" min="40" max="160" value="100" style="flex:1;accent-color:var(--accent)" oninput="dlPreviewSetBrightness(this.value)">
+            <span id="dl-preview-brightness-label" style="font-size:10px;color:var(--muted);width:32px;text-align:right;flex-shrink:0">100%</span>
+          </div>
+        </div>
         <button class="btn btn-secondary" id="dl-preview-btn" style="width:100%;justify-content:center;margin-top:10px;font-size:12px" onclick="dlLoadPreview()">▶️ Preview Video</button>
         <div id="dl-audio-preview-wrap" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px">
           <audio id="dl-audio-preview" controls style="width:100%;height:36px"></audio>
@@ -9157,18 +9169,43 @@ async function dlLoadPreview() {
   const btn = document.getElementById('dl-preview-btn');
   const wrap = document.getElementById('dl-preview-wrap');
   const video = document.getElementById('dl-preview-video');
+  const controls = document.getElementById('dl-preview-controls');
 
   btn.disabled = true; btn.textContent = '⏳ Menyiapkan preview...';
   try {
     const previewUrl = DL_API_BASE + '/api/download?url=' + encodeURIComponent(dlCurrentUrl) + '&quality=preview';
     video.src = previewUrl;
     wrap.style.display = 'block';
+    if (controls) controls.style.display = 'block';
     btn.style.display = 'none';
+    // Reset slider ke default tiap kali preview baru dimuat
+    const volSlider = document.getElementById('dl-preview-volume');
+    const brSlider = document.getElementById('dl-preview-brightness');
+    if (volSlider) { volSlider.value = 100; dlPreviewSetVolume(100); }
+    if (brSlider) { brSlider.value = 100; dlPreviewSetBrightness(100); }
     await video.play().catch(() => {}); // beberapa browser butuh interaksi user buat autoplay, gapapa kalau gagal
   } catch (e) {
     toast('❌ Gagal memuat preview', 'error');
     btn.disabled = false; btn.textContent = '▶️ Preview Video';
   }
+}
+
+// ── Kontrol Volume & Brightness buat preview downloader ──
+// Volume: langsung set video.volume (0-1). Brightness: CSS filter (video
+// asli gak berubah, cuma tampilan preview-nya -- video hasil download tetap
+// sama persis, ini murni bantu liat detail preview yang gelap/terang).
+function dlPreviewSetVolume(val) {
+  const video = document.getElementById('dl-preview-video');
+  const label = document.getElementById('dl-preview-volume-label');
+  if (video) video.volume = val / 100;
+  if (label) label.textContent = val + '%';
+}
+
+function dlPreviewSetBrightness(val) {
+  const video = document.getElementById('dl-preview-video');
+  const label = document.getElementById('dl-preview-brightness-label');
+  if (video) video.style.filter = `brightness(${val}%)`;
+  if (label) label.textContent = val + '%';
 }
 
 async function dlLoadAudioPreview() {
