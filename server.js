@@ -749,6 +749,25 @@ function formatUploadDate(d) {
   return `${day} ${ID_MONTHS[m]} ${y}`;
 }
 
+// Timestamp komentar dari yt-dlp itu Unix epoch detik (angka biasa), BEDA
+// dari upload_date video ("20260716") — makanya butuh formatter terpisah.
+// Dibikin "X lalu" (relatif) karena itu yang biasa dipakai UI komentar asli
+// TikTok/YouTube, bukan tanggal absolut.
+function formatCommentTime(unixSeconds) {
+  if (!unixSeconds || !Number.isFinite(unixSeconds)) return null;
+  const diffSec = Math.floor(Date.now() / 1000 - unixSeconds);
+  if (diffSec < 60) return 'Baru saja';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} menit lalu`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} jam lalu`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 30) return `${diffDay} hari lalu`;
+  const diffMonth = Math.floor(diffDay / 30);
+  if (diffMonth < 12) return `${diffMonth} bulan lalu`;
+  return `${Math.floor(diffMonth / 12)} tahun lalu`;
+}
+
 function runYtDlp(args, { timeoutMs = PROCESS_TIMEOUT_MS } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(YTDLP_BIN, args, { windowsHide: true });
@@ -1557,6 +1576,76 @@ async function handleDownloadRequest(req, res) {
 }
 app.get('/api/download', rateLimit, handleDownloadRequest);
 app.get('/api/v1/download', requireApiKey, handleDownloadRequest);
+
+// ── Isi komentar asli (bukan cuma jumlahnya) ──────────────────────────────
+// PENTING — keterbatasan teknis, bukan bug: yt-dlp CUMA punya extractor
+// komentar yang jalan buat YouTube. TikTok SAMPAI SEKARANG belum punya
+// dukungan comment-extraction di yt-dlp sama sekali (issue terbuka
+// bertahun-tahun di repo yt-dlp — https://github.com/yt-dlp/yt-dlp/issues/4012
+// dan #5037, statusnya masih "feature request", belum ada extractor-nya).
+// Instagram/Facebook/Twitter-X/Pinterest/Twitch/SoundCloud juga gak punya
+// dukungan comment-extraction yang reliable. Daripada nampilin field kosong
+// yang bikin user pikir video-nya emang gak ada komentar (padahal cuma
+// keterbatasan tool), endpoint ini balikin status "unsupported" yang jelas
+// buat platform selain YouTube — jujur ke user itu lebih baik daripada
+// pura-pura berhasil. commentCount (jumlah doang) tetap ada dari /api/info
+// buat semua platform seperti biasa.
+const COMMENTS_MAX = 20; // dibatasi biar cepat & gak numpuk beban server gratisan
+app.get('/api/comments', rateLimit, async (req, res) => {
+  const { url } = req.query;
+  if (!url || typeof url !== 'string' || !isSupportedUrl(url)) {
+    return res.status(400).json({ success: false, error: 'URL video tidak valid.' });
+  }
+
+  const platform = detectPlatform(url);
+  if (platform !== 'YouTube') {
+    return res.json({
+      success: false,
+      unsupported: true,
+      platform,
+      error: `Ambil isi komentar asli belum didukung untuk ${platform} — ini keterbatasan yt-dlp sendiri (belum ada extractor komentar buat platform ini), bukan masalah di server. Jumlah komentar tetap tersedia lewat info video.`
+    });
+  }
+
+  try {
+    const { stdout } = await runYtDlp([
+      '-j', '--no-warnings', '--no-playlist', '--skip-download', '--write-comments',
+      '--extractor-args', `youtube:comment_sort=top;max_comments=${COMMENTS_MAX},${COMMENTS_MAX},0,0`,
+      '--socket-timeout', '20', ...cookieArgs(), ...ytClientArgs(url), url
+    ], { timeoutMs: 60000 });
+
+    const firstLine = stdout.split('\n').find(l => l.trim().startsWith('{'));
+    if (!firstLine) throw new Error('Tidak bisa membaca komentar video.');
+    const info = JSON.parse(firstLine);
+
+    const rawComments = Array.isArray(info.comments) ? info.comments : [];
+    // Cuma komentar top-level (bukan balasan) di endpoint ringkas ini —
+    // biar daftarnya rapi dan gak kepanjangan buat ditampilin di kartu kecil.
+    const topLevel = rawComments.filter(c => !c.parent || c.parent === 'root');
+
+    const comments = topLevel.slice(0, COMMENTS_MAX).map(c => ({
+      id: c.id || null,
+      author: c.author || 'Pengguna YouTube',
+      authorAvatar: c.author_thumbnail || null,
+      authorIsUploader: !!c.author_is_uploader,
+      isHearted: !!c.is_favorited,
+      isPinned: !!c.is_pinned,
+      text: (c.text || '').slice(0, 1000),
+      likeCount: formatCount(c.like_count),
+      timeAgo: formatCommentTime(c.timestamp)
+    }));
+
+    res.json({
+      success: true,
+      platform,
+      totalCommentCount: formatCount(info.comment_count),
+      comments,
+      capped: topLevel.length > comments.length
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: friendlyError(e.message) });
+  }
+});
 
 const BATCH_MAX_URLS = 5;
 

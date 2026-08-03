@@ -65,6 +65,14 @@ manggil backend ini.
 - `GET  /api/download?url=...&quality=...` — stream file hasil download.
   Kualitas didukung: `best|1080|720|480|audio|audio_opus|music|photos|
   photos_video|thumbnail|subtitle`
+- `GET  /api/comments?url=...` — isi komentar ASLI (teks, nama+avatar
+  penulis, jumlah like, kapan diposting), bukan cuma angka jumlahnya.
+  **Cuma jalan buat YouTube** — yt-dlp belum punya extractor komentar buat
+  TikTok/Instagram/Facebook/dll sama sekali (keterbatasan yt-dlp sendiri,
+  issue terbuka bertahun-tahun di repo-nya). Buat platform selain YouTube,
+  endpoint ini balikin `{ success:false, unsupported:true, error:"..." }`
+  yang jelas — bukan pura-pura berhasil dengan list kosong. Dibatasi ke 20
+  komentar teratas (top-level, tanpa balasan) biar cepat & ringan
 - `GET  /api/creator-profile?url=...` — profil pembuat video (nama, avatar,
   followers, bio, status verifikasi, total video). `url` di sini adalah
   link profil/channel, bukan link video

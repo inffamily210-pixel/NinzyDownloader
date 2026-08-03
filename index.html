@@ -1796,6 +1796,7 @@ body{padding-bottom:78px}
             <div style="font-size:9px;color:var(--muted)">Musik latar video ini</div>
             <div id="dl-music-name" style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
           </div>
+          <button class="btn btn-secondary" id="dl-music-download-btn" onclick="dlDownloadMusicQuick(this)" style="flex-shrink:0;font-size:10px;padding:6px 10px;white-space:nowrap">⬇️ Lagu</button>
         </div>
         <div id="dl-analysis-wrap" style="display:none;margin-top:8px">
           <button onclick="dlToggleAnalysis()" style="width:100%;display:flex;justify-content:space-between;align-items:center;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:11px;color:var(--text);cursor:pointer">
@@ -1803,6 +1804,11 @@ body{padding-bottom:78px}
             <span id="dl-analysis-chevron">▾</span>
           </button>
           <div id="dl-analysis-body" style="display:none;margin-top:6px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:11px;line-height:1.9"></div>
+        </div>
+        <button class="btn btn-secondary" id="dl-comments-btn" onclick="dlLoadComments()" style="width:100%;justify-content:center;margin-top:8px;font-size:11px;padding:7px;display:none">💬 Lihat Komentar</button>
+        <div id="dl-comments-card" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div id="dl-comments-list" style="display:flex;flex-direction:column;gap:10px;max-height:320px;overflow-y:auto"></div>
+          <div id="dl-comments-note" style="font-size:9px;color:var(--muted);margin-top:8px;text-align:center"></div>
         </div>
         <button class="btn btn-secondary" id="dl-creator-btn" onclick="dlLoadCreatorProfile()" style="width:100%;justify-content:center;margin-top:8px;font-size:11px;padding:7px;display:none">👤 Lihat Profil Pembuat</button>
         <div id="dl-creator-card" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px">
@@ -1892,7 +1898,8 @@ body{padding-bottom:78px}
             <option value="mkv">MKV (kualitas maksimal, semua codec)</option>
           </select>
         </div>
-        <div id="dl-quality-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px"></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:10px;margin-bottom:4px">⬇️ Pilih preset kualitas / format download:</div>
+        <div id="dl-quality-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
         <div id="dl-share-area" style="display:none;margin-top:8px">
           <button class="btn btn-secondary" onclick="dlShareLast()" style="width:100%;justify-content:center;font-size:12px">📤 Bagikan File Terakhir</button>
         </div>
@@ -8833,6 +8840,9 @@ async function dlFetchInfo() {
     dlCurrentUploaderName = data.uploader || null;
     document.getElementById('dl-creator-btn').style.display = dlCurrentUploaderUrl ? 'flex' : 'none';
     document.getElementById('dl-creator-card').style.display = 'none';
+    document.getElementById('dl-comments-btn').style.display = data.commentCount ? 'flex' : 'none';
+    document.getElementById('dl-comments-card').style.display = 'none';
+    document.getElementById('dl-comments-list').innerHTML = '';
     document.getElementById('dl-related-videos').style.display = 'none';
     document.getElementById('dl-related-videos').innerHTML = '';
     document.getElementById('dl-related-more-wrap').style.display = 'none';
@@ -8887,6 +8897,12 @@ function dlResetPreview() {
   if (creatorBtn) { creatorBtn.style.display = 'none'; creatorBtn.disabled = false; creatorBtn.textContent = '👤 Lihat Profil Pembuat'; }
   const creatorCard = document.getElementById('dl-creator-card');
   if (creatorCard) creatorCard.style.display = 'none';
+  const commentsBtn = document.getElementById('dl-comments-btn');
+  if (commentsBtn) { commentsBtn.style.display = 'none'; commentsBtn.disabled = false; commentsBtn.textContent = '💬 Lihat Komentar'; }
+  const commentsCard = document.getElementById('dl-comments-card');
+  if (commentsCard) commentsCard.style.display = 'none';
+  const commentsList = document.getElementById('dl-comments-list');
+  if (commentsList) commentsList.innerHTML = '';
   const relatedVideos = document.getElementById('dl-related-videos');
   if (relatedVideos) { relatedVideos.style.display = 'none'; relatedVideos.innerHTML = ''; }
   const relatedBtn = document.getElementById('dl-related-btn');
@@ -8912,6 +8928,72 @@ async function dlCopyCaption() {
     toast('Caption disalin!', 'success');
   } catch (e) {
     toast('Gak bisa akses clipboard, coba lagi', 'error');
+  }
+}
+
+// Tombol pintas di kartu musik — download lagu kreator langsung 1 tap,
+// tanpa perlu scroll cari opsi "🎶 Download Lagu Ini" di grid preset.
+function dlDownloadMusicQuick(btn) {
+  if (!dlCurrentUrl) return;
+  dlDownload(dlCurrentUrl, 'music', btn);
+}
+
+async function dlLoadComments() {
+  if (!dlCurrentUrl) return;
+  const btn = document.getElementById('dl-comments-btn');
+  const card = document.getElementById('dl-comments-card');
+  const list = document.getElementById('dl-comments-list');
+  const note = document.getElementById('dl-comments-note');
+
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Memuat komentar...';
+  try {
+    const res = await fetch(DL_API_BASE + '/api/comments?url=' + encodeURIComponent(dlCurrentUrl));
+    const data = await res.json();
+
+    // "unsupported" BUKAN error — ini status normal buat platform yang
+    // memang belum ada dukungan comment-extraction di yt-dlp (TikTok, dkk).
+    // Ditampilin sebagai catatan biasa, bukan toast merah, biar user gak
+    // ngira ada yang rusak.
+    if (data.unsupported) {
+      list.innerHTML = '';
+      note.textContent = '💬 ' + (data.error || 'Isi komentar belum didukung untuk platform ini.');
+      card.style.display = 'block';
+      btn.style.display = 'none';
+      return;
+    }
+    if (!res.ok || !data.success) throw new Error(data.error || 'Gagal memuat komentar.');
+
+    if (!data.comments || !data.comments.length) {
+      list.innerHTML = '<div style="font-size:11px;color:var(--muted);text-align:center;padding:10px 0">Belum ada komentar di video ini.</div>';
+    } else {
+      // Placeholder abu-abu (base64 SVG) buat avatar kosong/gagal dimuat —
+      // src="" bisa bikin sebagian WebView request ulang halaman saat ini,
+      // jadi selalu isi src dengan sesuatu, sama seperti kartu profil creator.
+      const avatarPlaceholder = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iMjQiIGZpbGw9IiM0YjU1NjMiLz48Y2lyY2xlIGN4PSIyNCIgY3k9IjE5IiByPSI4IiBmaWxsPSIjZDFkNWRiIi8+PHBhdGggZD0iTTggNDJjMC05IDctMTUgMTYtMTVzMTYgNiAxNiAxNSIgZmlsbD0iI2QxZDVkYiIvPjwvc3ZnPg==';
+      list.innerHTML = data.comments.map(c => `
+        <div style="display:flex;gap:8px">
+          <img src="${c.authorAvatar ? dlEsc(c.authorAvatar) : avatarPlaceholder}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--surface2)" onerror="this.src='${avatarPlaceholder}'">
+          <div style="min-width:0;flex:1">
+            <div style="font-size:11px;font-weight:600;display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+              <span>${dlEsc(c.author)}</span>
+              ${c.authorIsUploader ? '<span style="background:var(--accent);color:#fff;font-size:8px;padding:1px 5px;border-radius:4px">Pembuat</span>' : ''}
+              ${c.isPinned ? '<span title="Disematkan">📌</span>' : ''}
+              ${c.isHearted ? '<span title="Disukai kreator">❤️</span>' : ''}
+            </div>
+            <div style="font-size:11px;color:var(--text);margin-top:2px;line-height:1.4;white-space:pre-wrap">${dlEsc(c.text)}</div>
+            <div style="font-size:9px;color:var(--muted);margin-top:3px">${[c.likeCount ? `👍 ${dlEsc(c.likeCount)}` : '', c.timeAgo ? dlEsc(c.timeAgo) : ''].filter(Boolean).join(' · ')}</div>
+          </div>
+        </div>`).join('');
+    }
+    note.textContent = data.capped
+      ? `Menampilkan ${data.comments.length} komentar teratas dari ${data.totalCommentCount || '?'} total.`
+      : (data.totalCommentCount ? `Total ${data.totalCommentCount} komentar.` : '');
+    card.style.display = 'block';
+    btn.style.display = 'none';
+  } catch (e) {
+    toast('❌ ' + (e.message || 'Gagal memuat komentar'), 'error');
+    btn.disabled = false; btn.textContent = orig;
   }
 }
 
@@ -9244,6 +9326,8 @@ async function dlUseBookmark(uploaderUrl) {
   document.getElementById('dl-meta-extra').textContent = '';
   document.getElementById('dl-quality-grid').innerHTML = '';
   document.getElementById('dl-creator-btn').style.display = 'none';
+  document.getElementById('dl-comments-btn').style.display = 'none';
+  document.getElementById('dl-comments-card').style.display = 'none';
   document.getElementById('dl-copy-caption-btn').style.display = 'none';
   document.getElementById('dl-preview-btn').style.display = 'none';
   document.getElementById('dl-trim-wrap').style.display = 'none';
