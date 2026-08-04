@@ -442,6 +442,15 @@ const PUSH_PRESETS = {
     body: (data && data.filename) ? `${data.filename} siap diunduh` : 'Video kamu siap diunduh',
     url: '/'
   }),
+  // Beda dari preset lain di atas: judul & isi pesan DM itu emang teks bebas
+  // dari user (namanya juga pesan pribadi), bukan teks tetap. Endpoint
+  // /api/push/send-dm di bawah yang jaga keamanannya (verifikasi identitas
+  // pengirim + cek relasi DM asli), BUKAN preset ini.
+  'dm-message': (data) => ({
+    title: (data && data.title) ? String(data.title).slice(0, 100) : '💬 Pesan baru',
+    body: (data && data.body) ? String(data.body).slice(0, 150) : '',
+    url: '/'
+  }),
   'test': () => ({
     title: '🔔 Notifikasi percobaan',
     body: 'Kalau ini muncul, push notification kamu udah aktif!',
@@ -2431,6 +2440,66 @@ app.post('/api/push/send', rateLimit, async (req, res) => {
     return res.status(result.reason === 'not_found' ? 404 : 500).json({ success: false, error: 'Gagal kirim push (' + result.reason + ').' });
   }
   res.json({ success: true });
+});
+
+// ── Push notif buat pesan DM (Chat Pribadi) baru ───────────────────────────
+// BEDA dari /api/push/send di atas: itu ngirim ke 1 subscription/device
+// spesifik (butuh tau 'endpoint'-nya persis) pakai teks preset yang tetap.
+// Push DM ini modelnya beda: (1) target-nya user BY EMAIL, bukan 1 device
+// -- karena user yang sama bisa punya beberapa device yang masing-masing
+// subscribe sendiri-sendiri lewat /api/push/subscribe, jadi semua device
+// terdaftar milik dia ikut dikirimin; (2) isi pesannya teks bebas beneran
+// dari user (namanya juga DM), bukan preset tetap kayak compress-done.
+//
+// Karena itu identitas PENGIRIM wajib diverifikasi via Firebase ID token
+// (sama kayak getVerifiedPremiumEmail) -- BUKAN dipercaya mentah-mentah
+// dari body request, biar orang gak bisa modal tau email siapa aja lalu
+// nge-spam push notifikasi palsu ke user manapun. Selain itu, endpoint ini
+// JUGA mensyaratkan udah ada thread DM asli (dokumen di koleksi dmThreads
+// dengan kedua email sebagai participants) antara pengirim & target --
+// dibuat otomatis oleh frontend begitu 2 user mulai chat pertama kali,
+// jadi kalau belum pernah ada percakapan sama sekali, push ditolak.
+app.post('/api/push/send-dm', rateLimit, async (req, res) => {
+  if (!PUSH_ENABLED || !fsDb) return res.json({ success: true, sent: 0 }); // fitur DM tetap jalan normal tanpa push kalau belum dikonfigurasi
+
+  const authHeader = req.headers.authorization || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!idToken) return res.status(401).json({ success: false, error: 'Login dulu buat kirim notifikasi.' });
+
+  let decoded;
+  try {
+    decoded = await admin.auth().verifyIdToken(idToken);
+  } catch (e) {
+    return res.status(401).json({ success: false, error: 'Sesi login gak valid, coba login ulang.' });
+  }
+  const senderEmail = (decoded.email || '').toLowerCase().trim();
+  if (!senderEmail) return res.status(400).json({ success: false, error: 'Akun kamu gak punya email.' });
+
+  const { toEmail, title, body } = req.body || {};
+  const targetEmail = (toEmail || '').toLowerCase().trim();
+  if (!targetEmail || targetEmail === senderEmail) return res.json({ success: true, sent: 0 });
+
+  try {
+    const threadId = [senderEmail, targetEmail].sort().join('__'); // sama persis kayak dmThreadId() di frontend
+    const threadSnap = await fsDb.collection('dmThreads').doc(threadId).get();
+    const participants = threadSnap.exists ? (threadSnap.data().participants || []) : [];
+    if (!participants.includes(senderEmail) || !participants.includes(targetEmail)) {
+      return res.status(403).json({ success: false, error: 'Gak ada percakapan DM yang valid dengan user ini.' });
+    }
+
+    const subsSnap = await fsDb.collection('pushSubscriptions').where('email', '==', targetEmail).get();
+    if (subsSnap.empty) return res.json({ success: true, sent: 0 });
+
+    const payload = PUSH_PRESETS['dm-message']({ title, body });
+    let sent = 0;
+    for (const doc of subsSnap.docs) {
+      const result = await sendPushToSubId(doc.id, payload);
+      if (result.ok) sent++;
+    }
+    res.json({ success: true, sent });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Gagal kirim notifikasi.' });
+  }
 });
 
 // ── Creator Watch: subscribe/unsubscribe alert upload baru dari favorit ───

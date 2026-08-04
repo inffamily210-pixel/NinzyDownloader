@@ -91,6 +91,14 @@ manggil backend ini.
 - `POST /api/push/unsubscribe` — body `{ endpoint }`
 - `POST /api/push/send` — body `{ endpoint, type, data? }`. `type` dibatasi ke
   preset di `PUSH_PRESETS` (`compress-done`, `test`) — bukan title/body bebas
+- `POST /api/push/send-dm` — body `{ toEmail, title, body }` + header
+  `Authorization: Bearer <Firebase ID token>`. Dipakai fitur Chat Pribadi
+  (DM) di frontend buat notif push pesan baru. Beda dari `/api/push/send`:
+  target-nya email user (semua device terdaftar miliknya ikut dikirimin),
+  dan isi pesannya teks bebas — makanya identitas pengirim WAJIB
+  diverifikasi via ID token, dan cuma jalan kalau memang sudah ada thread
+  DM asli (dokumen `dmThreads` dengan kedua email sebagai participants)
+  antara pengirim & target
 
 ### Creator Watch (alert upload baru dari creator favorit)
 - `POST /api/creator-watch/subscribe` — body `{ uploaderUrl, name, platform,
