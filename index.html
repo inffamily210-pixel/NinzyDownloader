@@ -718,6 +718,14 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .chat-bubble.bot{background:rgba(255,255,255,.05);backdrop-filter:blur(8px);border:1px solid var(--border);border-left:2px solid var(--accent);border-bottom-left-radius:4px;align-self:flex-start;box-shadow:0 2px 10px rgba(0,0,0,.15)}
 .chat-bubble.user{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-bottom-right-radius:4px;align-self:flex-end;box-shadow:0 2px 10px rgba(91,110,245,.2)}
 .chat-bubble-time{font-size:9px;color:var(--muted);margin-top:4px;text-align:right}
+/* .chat-bubble.bot tetap pakai abu-abu (var(--muted)) di atas — itu memang
+   kebaca jelas karena background bubble user lain gelap. Tapi bubble milik
+   sendiri (.user) latarnya gradient var(--accent), yang bisa terang kalau
+   warna aksennya di-custom (fitur premium) — abu-abu jadi nyaris gak
+   kebaca di situ, makanya jam pesan MASIH ada tapi hampir gak kelihatan
+   ("gak keliatan tulisannya"). Di-override jadi putih transparan khusus
+   di dalam .user biar tetap kebaca di warna aksen apa pun. */
+.chat-bubble.user .chat-bubble-time{color:rgba(255,255,255,.75)}
 .chat-input-area{background:var(--surface);border-top:1px solid var(--border);padding:12px 16px;display:flex;gap:8px;align-items:flex-end;position:sticky;bottom:0;max-width:640px;width:100%;margin:0 auto}
 .chat-input-box{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:10px 16px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;resize:none;max-height:100px;line-height:1.5;transition:border-color .2s,box-shadow .2s}
 .chat-input-box:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,110,245,.12)}
@@ -730,10 +738,15 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .chat-quick-btn:hover{background:rgba(37,211,102,.2)}
 /* Chat Global tambahan */
 .chat-bubble{ padding-bottom:18px; }
-/* Balas pesan (reply/quote) — dipakai bareng Chat Global & Chat Pribadi */
-.chat-reply-quote{font-size:10.5px;line-height:1.4;color:var(--muted);background:rgba(255,255,255,.06);border-left:2px solid var(--accent);border-radius:6px;padding:4px 8px;margin-bottom:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;transition:background .15s}
-.chat-reply-quote:hover{background:rgba(255,255,255,.12)}
-.chat-reply-quote b{color:var(--accent)}
+/* Balas pesan (reply/quote) — dipakai bareng Chat Global & Chat Pribadi.
+   Warnanya SENGAJA gak pakai var(--muted)/var(--accent): kotak kutipan ini
+   bisa muncul di atas bubble gelap (punya user lain) ATAU bubble gradient
+   terang (punya sendiri, apalagi kalau warna aksennya di-custom lewat fitur
+   premium) — jadi dibikin "chip" gelap + teks putih yang tetap kebaca di
+   background apa pun, gak gantung sama warna bubble di baliknya. */
+.chat-reply-quote{font-size:10.5px;line-height:1.4;color:rgba(255,255,255,.85);background:rgba(0,0,0,.22);border-left:2px solid rgba(255,255,255,.55);border-radius:6px;padding:4px 8px;margin-bottom:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;transition:background .15s}
+.chat-reply-quote:hover{background:rgba(0,0,0,.32)}
+.chat-reply-quote b{color:#fff}
 .gchat-row-highlight .chat-bubble{animation:gchatRowFlash 1.4s ease}
 @keyframes gchatRowFlash{0%,100%{box-shadow:none}25%{box-shadow:0 0 0 2px var(--accent)}}
 @media (prefers-reduced-motion:reduce){.gchat-row-highlight .chat-bubble{animation:none}}
