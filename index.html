@@ -17865,7 +17865,7 @@ function dmListenTyping(threadId, otherEmail) {
       statusEl.textContent = gchatIsOnline(otherEmail) ? '🟢 Online' : 'Percakapan pribadi';
       statusEl.style.color = '';
     }
-  }, () => {});
+  }, err => console.warn('[DM-Typing] listener gagal (cek Firestore Security Rules buat field "typing" di koleksi dmThreads):', err));
 }
 
 // Dipanggil tiap keystroke di kotak input DM (lihat oninput di HTML).
@@ -17882,11 +17882,13 @@ function dmNotifyTyping() {
 
   if (now - dmLastTypingWriteAt > 2500) {
     dmLastTypingWriteAt = now;
-    threadRef.set({ typing: { [myEmail]: now } }, { merge: true }).catch(() => {});
+    threadRef.set({ typing: { [myEmail]: now } }, { merge: true })
+      .catch(err => console.warn('[DM-Typing] gagal kirim status "sedang mengetik" (cek Security Rules):', err));
   }
   clearTimeout(dmTypingClearTimer);
   dmTypingClearTimer = setTimeout(() => {
-    threadRef.set({ typing: { [myEmail]: null } }, { merge: true }).catch(() => {});
+    threadRef.set({ typing: { [myEmail]: null } }, { merge: true })
+      .catch(err => console.warn('[DM-Typing] gagal clear status "sedang mengetik":', err));
   }, 4000);
 }
 
