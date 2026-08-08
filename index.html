@@ -710,14 +710,34 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .chat-wa-status::before{content:'';width:7px;height:7px;border-radius:50%;background:#34d399;flex-shrink:0;box-shadow:0 0 0 0 rgba(52,211,153,.6);animation:gchatPulseDot 2s ease-out infinite}
 @keyframes gchatPulseDot{0%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}70%{box-shadow:0 0 0 6px rgba(52,211,153,0)}100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}}
 .chat-bubbles{flex:1;padding:20px 16px;display:flex;flex-direction:column;gap:10px;max-width:640px;width:100%;margin:0 auto;overflow-y:auto;-webkit-overflow-scrolling:touch}
-.chat-bubble{max-width:82%;padding:10px 14px;border-radius:16px;font-size:13px;line-height:1.55;position:relative;word-break:break-word;animation:gchatBubbleIn .28s cubic-bezier(.2,.8,.3,1)}
+.chat-bubble{max-width:82%;padding:10px 14px;border-radius:16px;font-size:13px;line-height:1.55;position:relative;word-break:break-word}
 .chat-bubble.bot::before{content:'';position:absolute;bottom:0;left:-6px;width:12px;height:12px;background:inherit;border-left:inherit;border-bottom:inherit;clip-path:polygon(100% 0,100% 100%,0 100%);border-bottom-left-radius:2px}
 .chat-bubble.user::before{content:'';position:absolute;bottom:0;right:-6px;width:12px;height:12px;background:var(--accent2);clip-path:polygon(0 0,100% 100%,0 100%);border-bottom-right-radius:2px}
 @keyframes gchatBubbleIn{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
-@media (prefers-reduced-motion:reduce){.chat-wa-avatar,.chat-wa-status::before,.chat-bubble{animation:none}}
+/* Animasi masuk cuma buat baris pesan yang BENERAN baru (lihat gchatSeenIds/
+   dmSeenIds di JS) — bukan tiap kali render ulang. Sebelumnya animation
+   nempel langsung di .chat-bubble, jadi tiap ada 1 reaksi/edit di mana pun
+   di daftar, SEMUA bubble ikut nge-flash ulang karena listener render ulang
+   semuanya dari nol. Sekarang animation cuma nyala kalau parent row punya
+   class .chat-row-enter. */
+.chat-row-enter .chat-bubble{animation:gchatBubbleIn .3s cubic-bezier(.2,.8,.3,1)}
+@media (prefers-reduced-motion:reduce){.chat-wa-avatar,.chat-wa-status::before,.chat-row-enter .chat-bubble{animation:none}}
 .chat-bubble.bot{background:rgba(255,255,255,.05);backdrop-filter:blur(8px);border:1px solid var(--border);border-left:2px solid var(--accent);border-bottom-left-radius:4px;align-self:flex-start;box-shadow:0 2px 10px rgba(0,0,0,.15)}
-.chat-bubble.user{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-bottom-right-radius:4px;align-self:flex-end;box-shadow:0 2px 10px rgba(91,110,245,.2)}
+/* Shadow bubble sendiri SENGAJA didefinisikan 2x: baris pertama fallback
+   warna biru default buat browser lama yang gak ngerti color-mix(), baris
+   kedua nimpa pakai warna aksen yang LAGI AKTIF (termasuk kalau di-custom
+   lewat fitur premium) — biar shadow-nya selalu senada sama gradient
+   bubble-nya sendiri, bukan biru default yang gak nyambung. */
+.chat-bubble.user{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-bottom-right-radius:4px;align-self:flex-end;box-shadow:0 4px 14px rgba(91,110,245,.25);box-shadow:0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent)}
 .chat-bubble-time{font-size:9px;color:var(--muted);margin-top:4px;text-align:right}
+/* .chat-bubble.bot tetap pakai abu-abu (var(--muted)) di atas — itu memang
+   kebaca jelas karena background bubble user lain gelap. Tapi bubble milik
+   sendiri (.user) latarnya gradient var(--accent), yang bisa terang kalau
+   warna aksennya di-custom (fitur premium) — abu-abu jadi nyaris gak
+   kebaca di situ, makanya jam pesan MASIH ada tapi hampir gak kelihatan
+   ("gak keliatan tulisannya"). Di-override jadi putih transparan khusus
+   di dalam .user biar tetap kebaca di warna aksen apa pun. */
+.chat-bubble.user .chat-bubble-time{color:rgba(255,255,255,.75)}
 .chat-input-area{background:var(--surface);border-top:1px solid var(--border);padding:12px 16px;display:flex;gap:8px;align-items:flex-end;position:sticky;bottom:0;max-width:640px;width:100%;margin:0 auto}
 .chat-input-box{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:20px;padding:10px 16px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;resize:none;max-height:100px;line-height:1.5;transition:border-color .2s,box-shadow .2s}
 .chat-input-box:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,110,245,.12)}
@@ -730,6 +750,29 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .chat-quick-btn:hover{background:rgba(37,211,102,.2)}
 /* Chat Global tambahan */
 .chat-bubble{ padding-bottom:18px; }
+/* Balas pesan (reply/quote) — dipakai bareng Chat Global & Chat Pribadi.
+   Warnanya SENGAJA gak pakai var(--muted)/var(--accent): kotak kutipan ini
+   bisa muncul di atas bubble gelap (punya user lain) ATAU bubble gradient
+   terang (punya sendiri, apalagi kalau warna aksennya di-custom lewat fitur
+   premium) — jadi dibikin "chip" gelap + teks putih yang tetap kebaca di
+   background apa pun, gak gantung sama warna bubble di baliknya. */
+.chat-reply-quote{font-size:10.5px;line-height:1.4;color:rgba(255,255,255,.85);background:rgba(0,0,0,.22);border-left:2px solid rgba(255,255,255,.55);border-radius:6px;padding:4px 8px;margin-bottom:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;transition:background .15s}
+.chat-reply-quote:hover{background:rgba(0,0,0,.32)}
+.chat-reply-quote b{color:#fff}
+.gchat-row-highlight .chat-bubble{animation:gchatRowFlash 1.4s ease}
+@keyframes gchatRowFlash{0%,100%{box-shadow:none}25%{box-shadow:0 0 0 2px var(--accent)}}
+@media (prefers-reduced-motion:reduce){.gchat-row-highlight .chat-bubble{animation:none}}
+/* Pemisah tanggal ("Hari ini"/"Kemarin"/tanggal) di antara pesan —
+   dipakai bareng Chat Global & Chat Pribadi */
+.chat-date-sep{display:flex;justify-content:center;margin:6px 0 2px;max-width:640px;width:100%;margin-left:auto;margin-right:auto}
+.chat-date-sep span{background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-size:10px;font-weight:600;padding:4px 12px;border-radius:20px}
+/* Titik animasi "sedang mengetik..." di status bar thread DM */
+.typing-dots{display:inline-flex;gap:3px;margin-left:5px;vertical-align:middle}
+.typing-dots span{width:4px;height:4px;border-radius:50%;background:var(--accent);display:inline-block;animation:typingBounce 1.2s infinite ease-in-out}
+.typing-dots span:nth-child(2){animation-delay:.15s}
+.typing-dots span:nth-child(3){animation-delay:.3s}
+@keyframes typingBounce{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-3px);opacity:1}}
+@media (prefers-reduced-motion:reduce){.typing-dots span{animation:none;opacity:.85}}
 .chat-bubble img.chat-img{max-width:100%;border-radius:10px;margin-top:4px;display:block;cursor:pointer}
 .chat-bubble .chat-edited-tag{font-size:9px;opacity:.65;font-style:italic;margin-left:4px}
 .chat-actions{position:absolute;bottom:2px;right:10px;display:flex;gap:6px}
@@ -1150,9 +1193,9 @@ body{padding-bottom:78px}
       </div>
     </div>
     <button class="btn-premium" onclick="openPremiumModal()" id="btn-premium-hdr" style="font-size:11px;padding:6px 12px;display:inline-flex;align-items:center;justify-content:center;min-width:64px">⭐ Premium</button>
-    <button class="chat-hdr-btn" style="position:relative" onclick="openChatPage()" id="btn-chat-hdr" title="Chat Global">
+    <button class="chat-hdr-btn" onclick="openChatPage()" id="btn-chat-hdr" title="Chat Global">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
-      Chat<span id="gchat-unread-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:9px;align-items:center;justify-content:center;padding:0 3px;border:2px solid var(--bg)">0</span>
+      Chat
     </button>
     <button class="chat-hdr-btn" style="background:linear-gradient(135deg,#10b981,#059669);position:relative" onclick="dmOpenInbox()" id="btn-dm-hdr" title="Pesan Pribadi">
       ✉️ Pesan<span id="dm-unread-badge" style="display:none;position:absolute;top:-5px;right:-5px;background:#ef4444;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:9px;align-items:center;justify-content:center;padding:0 3px;border:2px solid var(--bg)">0</span>
@@ -9966,7 +10009,6 @@ function renderUserHeader(user) {
   // fitur DM, di bawah). Dibungkus typeof check supaya gak error kalau
   // dipanggil sebelum block itu ke-load — sudah pernah kejadian sebelumnya.
   if (typeof dmWatchGlobalUnread === 'function') dmWatchGlobalUnread();
-  if (typeof gchatUpdateUnreadBadge === 'function') gchatUpdateUnreadBadge();
   const area = document.getElementById('user-header-area');
   const initial = (user.name||'U')[0].toUpperCase();
   const prem = isPremium();
@@ -16892,6 +16934,10 @@ const CHAT_WA_NUMBER = '6285642515502';
 const GCHAT_COLLECTION = 'globalChat';
 const GCHAT_LIMIT = 150;
 let gchatUnsub = null;
+let gchatSeenIds = new Set(); // id pesan yang udah pernah dirender — buat bedain "pesan baru beneran" vs render ulang biasa
+let gchatFirstLoad = true; // biar batch 150 pesan pertama gak nge-flash semua pas baru buka halaman
+let gchatReplyTarget = null; // {id, name, text} — pesan yang lagi dibalas, null kalau gak ada
+let gchatMsgCache = {}; // id -> {name, text, imageUrl}, dipakai isi reply-bar tanpa perlu escape teks bebas di atribut onclick
 let gchatEditingId = null;
 let gchatPendingImage = null; // {file, dataUrl}
 
@@ -16930,6 +16976,24 @@ function gchatIsAdmin() {
 }
 
 function chatNow(ts) { const d = ts ? new Date(ts) : new Date(); return d.toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'}); }
+
+// Label pemisah tanggal ("Hari ini"/"Kemarin"/"12 Agu 2026") — dipakai
+// bareng Chat Global & Chat Pribadi buat mengelompokkan pesan per hari.
+function chatDateLabel(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const startOfDay = dt => new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
+  if (diffDays === 0) return 'Hari ini';
+  if (diffDays === 1) return 'Kemarin';
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function chatDateSeparator(ts) {
+  const el = document.createElement('div');
+  el.className = 'chat-date-sep';
+  el.innerHTML = `<span>${chatDateLabel(ts)}</span>`;
+  return el;
+}
 
 function gchatEscape(str) {
   return (str||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -17007,7 +17071,7 @@ function gchatRenderReactions(id, reactions) {
   return html;
 }
 
-function gchatRenderMessage(doc) {
+function gchatRenderMessage(doc, animate) {
   const m = doc.data();
   const id = doc.id;
   const me = gchatGetIdentity();
@@ -17015,15 +17079,19 @@ function gchatRenderMessage(doc) {
   const canManage = isMine || gchatIsAdmin();
   const side = isMine ? 'user' : 'bot';
   const online = m.email ? gchatIsOnline(m.email) : false;
+  gchatMsgCache[id] = { name: m.name || 'User', text: m.text || '', imageUrl: m.imageUrl || '' };
 
   const row = document.createElement('div');
-  row.className = 'gchat-row' + (isMine ? ' mine' : '');
+  row.className = 'gchat-row' + (isMine ? ' mine' : '') + (animate ? ' chat-row-enter' : '');
   row.id = 'gchat-row-' + id;
 
   const avatarHtml = gchatAvatarHtml(m.name, m.photo, m.photoIsGif, '', online);
 
   let bubbleInner = '';
   if (!isMine) bubbleInner += `<div class="chat-bubble-name">${gchatEscape(m.name||'User')}</div>`;
+  if (m.replyTo) {
+    bubbleInner += `<div class="chat-reply-quote" onclick="gchatScrollToMessage('${m.replyTo.id}')">↩ <b>${gchatEscape(m.replyTo.name)}</b>: ${gchatEscape((m.replyTo.text||'').slice(0,60))}</div>`;
+  }
   if (m.imageUrl) {
     bubbleInner += `<img class="chat-img" src="${m.imageUrl}" onclick="window.open('${m.imageUrl}','_blank')" loading="lazy">`;
   }
@@ -17034,12 +17102,13 @@ function gchatRenderMessage(doc) {
   const editedTag = m.edited ? '<span class="chat-edited-tag">(diedit)</span>' : '';
   bubbleInner += `<div class="chat-bubble-time">${chatNow(m.createdAt)}${editedTag}</div>`;
 
+  bubbleInner += `<div class="chat-actions">`;
+  bubbleInner += `<button class="chat-action-btn" onclick="gchatSetReplyTarget('${id}')" title="Balas">↩️</button>`;
   if (canManage) {
-    bubbleInner += `<div class="chat-actions">`;
     if (m.text && !m.imageUrl) bubbleInner += `<button class="chat-action-btn" onclick="gchatStartEdit('${id}')" title="Edit">✏️</button>`;
     bubbleInner += `<button class="chat-action-btn" onclick="gchatDeleteMessage('${id}')" title="Hapus">🗑️</button>`;
-    bubbleInner += `</div>`;
   }
+  bubbleInner += `</div>`;
 
   const reactPicker = `<div class="gchat-react-picker" id="react-picker-${id}">${GCHAT_REACT_EMOJIS.map(e => `<button onclick="gchatReact('${id}','${e}')">${e}</button>`).join('')}</div>`;
   const reactTrigger = `<button class="gchat-react-trigger" onclick="gchatToggleReactPicker('${id}',this)" title="Beri reaksi">😊+</button>`;
@@ -17055,43 +17124,44 @@ function gchatRenderMessage(doc) {
   return row;
 }
 
-// ═══ LAST-READ MARKER (Chat Global) ═══
-// BEDA dari read-receipt DM (per-pesan, tersimpan di Firestore, keliatan
-// buat lawan bicara) -- ini murni PREFERENSI TAMPILAN PRIBADI: kapan SAYA
-// terakhir baca chat global. Gak perlu sinkron ke Firestore/lintas device
-// (chat global itu publik & ramai, "siapa baca apa" gak relevan buat orang
-// lain), makanya cukup localStorage aja.
-function gchatLastReadKey() {
-  const me = gchatGetIdentity();
-  return 'ninzy_gchat_lastread_' + (me.email || me.uid || 'guest');
+function gchatSetReplyTarget(id) {
+  const m = gchatMsgCache[id];
+  if (!m) return;
+  const preview = m.text || (m.imageUrl ? '📷 Gambar' : '');
+  gchatReplyTarget = { id, name: m.name, text: preview };
+  const bar = document.getElementById('gchat-reply-bar');
+  if (bar) {
+    bar.style.display = 'flex';
+    document.getElementById('gchat-reply-name').textContent = m.name;
+    document.getElementById('gchat-reply-text').textContent = preview.slice(0, 80);
+  }
+  const input = document.getElementById('chat-input');
+  if (input) input.focus();
 }
-function gchatGetLastRead() { return parseInt(localStorage.getItem(gchatLastReadKey()) || '0', 10); }
-function gchatSetLastRead(ts) { localStorage.setItem(gchatLastReadKey(), String(ts || Date.now())); }
 
-// Hitung berapa pesan yang createdAt-nya lebih baru dari lastRead, update
-// badge di tombol header. Dipanggil abis listen dapat data baru (biar
-// badge ke-update real-time walau chat lagi ketutup), DAN saat chat pertama
-// kali dibuka (buat nampilin angka yang bener sebelum snapshot pertama).
-async function gchatUpdateUnreadBadge() {
-  const badge = document.getElementById('gchat-unread-badge');
-  if (!badge) return;
-  const lastRead = gchatGetLastRead();
-  try {
-    const snap = await fdb.collection(GCHAT_COLLECTION).where('createdAt', '>', lastRead).get();
-    const count = snap.size;
-    if (count > 0) {
-      badge.textContent = count > 99 ? '99+' : String(count);
-      badge.style.display = 'flex';
-    } else {
-      badge.style.display = 'none';
-    }
-  } catch (e) { /* gagal hitung unread bukan hal fatal, badge tetap apa adanya */ }
+function gchatCancelReply() {
+  gchatReplyTarget = null;
+  const bar = document.getElementById('gchat-reply-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+// Scroll ke pesan asli yang dibalas + kasih highlight sebentar. Kalau
+// pesannya udah gak ada di batch 150 pesan terakhir (atau udah dihapus),
+// diam-diam gagal dengan pesan info — bukan error, ini situasi normal.
+function gchatScrollToMessage(id) {
+  const el = document.getElementById('gchat-row-' + id);
+  if (!el) { toast('Pesan asli gak ditemukan (mungkin sudah lama/dihapus)', 'info'); return; }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('gchat-row-highlight');
+  setTimeout(() => el.classList.remove('gchat-row-highlight'), 1500);
 }
 
 function gchatListen() {
   const area = document.getElementById('chat-bubbles-area');
   if (!area) return;
   if (gchatUnsub) { gchatUnsub(); gchatUnsub = null; }
+  gchatSeenIds = new Set();
+  gchatFirstLoad = true;
   area.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:20px">Memuat chat global...</div>';
   gchatUnsub = fdb.collection(GCHAT_COLLECTION)
     .orderBy('createdAt', 'desc')
@@ -17099,13 +17169,22 @@ function gchatListen() {
     .onSnapshot(snap => {
       const docs = snap.docs.slice().reverse();
       area.innerHTML = '';
+      const isFirstLoad = gchatFirstLoad;
+      gchatFirstLoad = false;
       if (!docs.length) {
         area.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:20px">Belum ada pesan. Jadilah yang pertama menyapa~ 👋</div>';
       } else {
-        docs.forEach(d => area.appendChild(gchatRenderMessage(d)));
+        let prevDay = null;
+        docs.forEach(d => {
+          const ts = d.data().createdAt;
+          const day = ts ? new Date(ts).toDateString() : null;
+          if (day && day !== prevDay) { area.appendChild(chatDateSeparator(ts)); prevDay = day; }
+          const isNew = !gchatSeenIds.has(d.id);
+          gchatSeenIds.add(d.id);
+          area.appendChild(gchatRenderMessage(d, isNew && !isFirstLoad));
+        });
       }
       area.scrollTop = area.scrollHeight;
-      gchatUpdateUnreadBadge();
       // Refresh status online di background, lalu re-render badge titik hijau tanpa reset scroll
       const emails = docs.map(d => d.data().email).filter(Boolean);
       if (emails.length) {
@@ -17177,6 +17256,8 @@ async function gchatSend() {
   const sendBtn = document.getElementById('chat-send-btn');
   if (sendBtn) sendBtn.disabled = true;
 
+  const replyPayload = gchatReplyTarget ? { id: gchatReplyTarget.id, name: gchatReplyTarget.name, text: (gchatReplyTarget.text || '').slice(0, 80) } : null;
+
   try {
     let imageUrl = '';
     if (hasImage) {
@@ -17192,8 +17273,10 @@ async function gchatSend() {
       imageUrl: imageUrl || '',
       edited: false,
       reactions: {},
+      replyTo: replyPayload,
       createdAt: Date.now()
     });
+    gchatCancelReply();
     if (me.email) {
       try { await fbUserRef(me.email).set({ lastSeen: Date.now() }, { merge: true }); } catch(e){}
     }
@@ -17380,9 +17463,6 @@ function openChatPage() {
   document.documentElement.style.overflow = 'hidden';
   gchatListen();
   gchatUpdateLastSeen();
-  gchatSetLastRead(Date.now());
-  const badge = document.getElementById('gchat-unread-badge');
-  if (badge) badge.style.display = 'none'; // langsung sembunyiin, gak perlu nunggu snapshot berikutnya
   if (_gchatHeartbeat) clearInterval(_gchatHeartbeat);
   _gchatHeartbeat = setInterval(gchatUpdateLastSeen, 60000);
 }
@@ -17391,10 +17471,6 @@ function closeChatPage() {
   document.getElementById('chat-page').classList.remove('show');
   document.body.style.overflow = '';
   document.documentElement.style.overflow = '';
-  // Update lastRead ke waktu SEKARANG (bukan pas buka) -- biar pesan yang
-  // masuk SELAMA chat kebuka juga ikut kehitung "udah dibaca", bukan cuma
-  // yang ada pas pertama buka doang.
-  gchatSetLastRead(Date.now());
   if (gchatUnsub) { gchatUnsub(); gchatUnsub = null; }
   if (_gchatHeartbeat) { clearInterval(_gchatHeartbeat); _gchatHeartbeat = null; }
   gchatCloseUserList(); // pastikan panel user online ikut tertutup, jangan nyangkut di halaman lain
@@ -17500,6 +17576,13 @@ let dmInboxUnsub = null;
 let dmThreadUnsub = null;
 let dmCurrentThreadId = null;
 let dmCurrentOther = null; // {email, name, photo, photoIsGif}
+let dmReplyTarget = null; // {id, name, text} — pesan yang lagi dibalas
+let dmMsgCache = {}; // id -> {name, text}
+let dmTypingUnsub = null;
+let dmLastTypingWriteAt = 0;
+let dmTypingClearTimer = null;
+let dmSeenIds = new Set(); // id pesan yang udah pernah dirender di thread ini
+let dmFirstLoad = true;
 let _dmUnreadTotal = 0;
 
 // Rules Firestore yang dipakai (sudah di-deploy di Firebase Console →
@@ -17674,10 +17757,7 @@ function dmWatchGlobalUnread() {
 // fungsi ini) kemungkinan sudah terpanggil lebih dulu saat halaman load —
 // sebelum script block ini ter-parse browser — jadi badge unread perlu
 // "disusulkan" begitu fungsi ini tersedia.
-if (typeof getSession === 'function' && getSession() && getSession().email) {
-  dmWatchGlobalUnread();
-  if (typeof gchatUpdateUnreadBadge === 'function') gchatUpdateUnreadBadge();
-}
+if (typeof getSession === 'function' && getSession() && getSession().email) { dmWatchGlobalUnread(); }
 
 // ── MULAI CHAT dari daftar user (tombol "💬 Chat") ────────────────────
 function dmStartChat(email, name, photo, photoIsGif) {
@@ -17693,6 +17773,7 @@ async function dmOpenThread(otherEmail, otherName, otherPhoto, otherPhotoIsGif) 
   const session = dmRequireLogin();
   if (!session) return;
   dmCloseInbox();
+  dmCancelReply(); // reset sisa reply-target dari thread sebelumnya (kalau ada)
 
   dmCurrentOther = { email: otherEmail.toLowerCase(), name: otherName || otherEmail.split('@')[0], photo: otherPhoto || '', photoIsGif: !!otherPhotoIsGif };
   dmCurrentThreadId = dmThreadId(session.email, otherEmail);
@@ -17744,6 +17825,7 @@ async function dmOpenThread(otherEmail, otherName, otherPhoto, otherPhotoIsGif) 
   } catch (e) { console.warn('[DM] gagal siapkan thread:', e); }
 
   dmListenThread(dmCurrentThreadId, session.email.toLowerCase());
+  dmListenTyping(dmCurrentThreadId, dmCurrentOther.email);
   // Reset unread milik kita sendiri karena baru buka percakapan ini
   threadRef.set({ unread: { [session.email.toLowerCase()]: 0 } }, { merge: true }).catch(()=>{});
 }
@@ -17753,6 +17835,17 @@ function dmCloseThread() {
   document.body.style.overflow = '';
   document.documentElement.style.overflow = '';
   if (dmThreadUnsub) { dmThreadUnsub(); dmThreadUnsub = null; }
+  if (dmTypingUnsub) { dmTypingUnsub(); dmTypingUnsub = null; }
+  clearTimeout(dmTypingClearTimer);
+  // Best-effort bersihin status "sedang mengetik" milik sendiri biar gak
+  // nyangkut kalau nutup thread pas lagi ngetik (gak perlu nunggu hasilnya).
+  if (dmCurrentThreadId) {
+    const session = getSession();
+    if (session && session.email) {
+      fdb.collection(DM_COLLECTION).doc(dmCurrentThreadId).set({ typing: { [session.email.toLowerCase()]: null } }, { merge: true }).catch(()=>{});
+    }
+  }
+  dmCancelReply();
   dmCurrentThreadId = null;
   dmCurrentOther = null;
 }
@@ -17761,57 +17854,137 @@ function dmListenThread(threadId, myEmail) {
   const area = document.getElementById('dm-thread-bubbles-area');
   area.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:12px;padding:20px">Memuat percakapan...</div>';
   if (dmThreadUnsub) { dmThreadUnsub(); dmThreadUnsub = null; }
+  dmSeenIds = new Set();
+  dmFirstLoad = true;
 
   dmThreadUnsub = fdb.collection(DM_COLLECTION).doc(threadId).collection('messages')
     .orderBy('createdAt', 'desc').limit(DM_MSG_LIMIT)
     .onSnapshot(snap => {
       const docs = [...snap.docs].reverse();
       area.innerHTML = '';
+      const isFirstLoad = dmFirstLoad;
+      dmFirstLoad = false;
       if (!docs.length) {
         area.innerHTML = `<div style="text-align:center;color:var(--muted);font-size:12px;padding:20px">Belum ada pesan. Mulai obrolan dengan ${gchatEscape(dmCurrentOther ? dmCurrentOther.name : 'user ini')}!</div>`;
         return;
       }
-      docs.forEach(doc => area.appendChild(dmRenderMessage(doc, myEmail)));
+      let prevDay = null;
+      docs.forEach(doc => {
+        const ts = doc.data().createdAt;
+        const day = ts ? new Date(ts).toDateString() : null;
+        if (day && day !== prevDay) { area.appendChild(chatDateSeparator(ts)); prevDay = day; }
+        const isNew = !dmSeenIds.has(doc.id);
+        dmSeenIds.add(doc.id);
+        area.appendChild(dmRenderMessage(doc, myEmail, isNew && !isFirstLoad));
+      });
       area.scrollTop = area.scrollHeight;
-      // Tandai pesan dari LAWAN BICARA yang belum dibaca jadi dibaca --
-      // dipanggil tiap ada snapshot baru (termasuk pas thread pertama
-      // kali dibuka), jadi read-receipt update otomatis begitu user
-      // beneran liat pesannya, bukan cuma buka daftar thread doang.
-      dmMarkThreadAsRead(threadId, myEmail, docs);
+
+      // Tandai pesan dari lawan bicara yang belum "read" jadi sudah dibaca,
+      // karena thread ini sedang dibuka/dilihat sekarang. Ditulis SEKALI
+      // per snapshot pakai batch (bukan 1 write per pesan), dan cuma jalan
+      // kalau memang ada yang perlu diupdate.
+      const unreadFromOther = docs.filter(doc => {
+        const d = doc.data();
+        return (d.sender || '').toLowerCase() !== myEmail && d.read === false;
+      });
+      if (unreadFromOther.length) {
+        const batch = fdb.batch();
+        unreadFromOther.forEach(doc => batch.update(doc.ref, { read: true }));
+        batch.commit().catch(err => console.warn('[DM-Read] gagal tandai pesan sudah dibaca:', err));
+      }
     }, err => {
       console.warn('[DM] gagal load pesan:', err);
       area.innerHTML = '<div style="text-align:center;color:var(--red);font-size:12px;padding:20px">Gagal memuat pesan. Cek koneksi internet kamu.</div>';
     });
 }
 
-// Tandai semua pesan dari lawan bicara (bukan dari diri sendiri) yang
-// masih read:false jadi read:true, pakai batched write biar 1 kali
-// commit aja walau ada banyak pesan yang perlu diupdate sekaligus.
-// Sekalian reset unread counter thread buat user ini ke 0.
-async function dmMarkThreadAsRead(threadId, myEmail, docs) {
-  const unreadFromOther = docs.filter(d => {
-    const m = d.data();
-    return (m.sender || '').toLowerCase() !== myEmail && m.read === false;
-  });
-  if (!unreadFromOther.length) return;
-  try {
-    const batch = fdb.batch();
-    unreadFromOther.forEach(d => batch.update(d.ref, { read: true, readAt: Date.now() }));
-    await batch.commit();
-    await fdb.collection(DM_COLLECTION).doc(threadId).set({ unread: { [myEmail]: 0 } }, { merge: true });
-  } catch (e) {
-    console.warn('[DM] gagal tandai pesan dibaca:', e);
+function dmSetReplyTarget(id) {
+  const m = dmMsgCache[id];
+  if (!m) return;
+  dmReplyTarget = { id, name: m.name, text: m.text };
+  const bar = document.getElementById('dm-reply-bar');
+  if (bar) {
+    bar.style.display = 'flex';
+    document.getElementById('dm-reply-name').textContent = m.name;
+    document.getElementById('dm-reply-text').textContent = (m.text || '').slice(0, 80);
   }
+  const input = document.getElementById('dm-thread-input');
+  if (input) input.focus();
 }
 
-function dmRenderMessage(doc, myEmail) {
+function dmCancelReply() {
+  dmReplyTarget = null;
+  const bar = document.getElementById('dm-reply-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+// Scroll ke pesan asli yang dibalas + highlight sebentar. Kalau pesannya
+// di luar batch DM_MSG_LIMIT (jarang, riwayat sangat panjang) atau sudah
+// dihapus, gagal dengan pesan info biasa, bukan error.
+function dmScrollToMessage(id) {
+  const el = document.getElementById('dm-row-' + id);
+  if (!el) { toast('Pesan asli gak ditemukan (mungkin sudah lama/dihapus)', 'info'); return; }
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('gchat-row-highlight');
+  setTimeout(() => el.classList.remove('gchat-row-highlight'), 1500);
+}
+
+// Dengerin status "sedang mengetik" lawan bicara — disimpan di field
+// `typing` pada dokumen thread yang sama (BUKAN di subcollection messages),
+// jadi butuh listener terpisah dari dmListenThread di atas.
+function dmListenTyping(threadId, otherEmail) {
+  if (dmTypingUnsub) { dmTypingUnsub(); dmTypingUnsub = null; }
+  dmTypingUnsub = fdb.collection(DM_COLLECTION).doc(threadId).onSnapshot(snap => {
+    const statusEl = document.getElementById('dm-thread-status');
+    if (!statusEl || !snap.exists) return;
+    const typingAt = (snap.data().typing || {})[otherEmail];
+    // Dianggap masih ngetik kalau update terakhir < 6 detik lalu — jaga-jaga
+    // seandainya tab lawan bicara ketutup mendadak tanpa sempat clear status.
+    const isTyping = !!(typingAt && (Date.now() - typingAt) < 6000);
+    if (isTyping) {
+      statusEl.innerHTML = 'sedang mengetik<span class="typing-dots"><span></span><span></span><span></span></span>';
+      statusEl.style.color = 'var(--accent)';
+    } else {
+      statusEl.textContent = gchatIsOnline(otherEmail) ? '🟢 Online' : 'Percakapan pribadi';
+      statusEl.style.color = '';
+    }
+  }, err => console.warn('[DM-Typing] listener gagal (cek Firestore Security Rules buat field "typing" di koleksi dmThreads):', err));
+}
+
+// Dipanggil tiap keystroke di kotak input DM (lihat oninput di HTML).
+// Nulis ke Firestore di-throttle max 1x/2.5 detik selama terus ngetik
+// (bukan tiap huruf) biar gak boros write quota di server gratisan, plus
+// auto-clear abis 4 detik gak ada keystroke baru (debounce).
+function dmNotifyTyping() {
+  if (!dmCurrentThreadId) return;
+  const session = getSession();
+  if (!session || !session.email) return;
+  const myEmail = session.email.toLowerCase();
+  const threadRef = fdb.collection(DM_COLLECTION).doc(dmCurrentThreadId);
+  const now = Date.now();
+
+  if (now - dmLastTypingWriteAt > 2500) {
+    dmLastTypingWriteAt = now;
+    threadRef.set({ typing: { [myEmail]: now } }, { merge: true })
+      .catch(err => console.warn('[DM-Typing] gagal kirim status "sedang mengetik" (cek Security Rules):', err));
+  }
+  clearTimeout(dmTypingClearTimer);
+  dmTypingClearTimer = setTimeout(() => {
+    threadRef.set({ typing: { [myEmail]: null } }, { merge: true })
+      .catch(err => console.warn('[DM-Typing] gagal clear status "sedang mengetik":', err));
+  }, 4000);
+}
+
+function dmRenderMessage(doc, myEmail, animate) {
   const id = doc.id;
   const m = doc.data();
   const isMine = (m.sender || '').toLowerCase() === myEmail;
   const side = isMine ? 'user' : 'bot';
+  const senderName = isMine ? (gchatGetIdentity().name || 'Kamu') : (dmCurrentOther ? dmCurrentOther.name : 'User');
+  dmMsgCache[id] = { name: senderName, text: m.text || '' };
 
   const row = document.createElement('div');
-  row.className = 'gchat-row' + (isMine ? ' mine' : '');
+  row.className = 'gchat-row' + (isMine ? ' mine' : '') + (animate ? ' chat-row-enter' : '');
   row.id = 'dm-row-' + id;
 
   const avatarHtml = isMine
@@ -17819,21 +17992,23 @@ function dmRenderMessage(doc, myEmail) {
     : gchatAvatarHtml(dmCurrentOther ? dmCurrentOther.name : 'U', dmCurrentOther ? dmCurrentOther.photo : '', dmCurrentOther ? dmCurrentOther.photoIsGif : false, '', gchatIsOnline(m.sender));
 
   const formatted = gchatEscape(m.text || '').replace(/\n/g, '<br>');
-  // Centang gaya WhatsApp: ✓ abu-abu = terkirim, ✓✓ biru = udah dibaca.
-  // Pesan lama (sebelum fitur ini ada) gak punya field 'read' sama sekali
-  // -- diperlakukan sebagai "belum dibaca" (✓ abu), bukan error.
+  // Centang tunggal (terkirim) / centang ganda warna aksen (udah dibaca) —
+  // cuma muncul di pesan sendiri, sama seperti readTag versi teks sebelumnya.
   const readTag = isMine
-    ? (m.read ? '<span style="color:#5B9CF5;font-size:11px" title="Dibaca">✓✓</span>' : '<span style="color:var(--muted);font-size:11px" title="Terkirim">✓</span>')
+    ? `<span style="margin-left:3px;${m.read ? 'color:var(--accent)' : 'opacity:.6'}" title="${m.read ? 'Dibaca' : 'Terkirim'}">${m.read ? '✓✓' : '✓'}</span>`
     : '';
   const editedTag = m.edited ? '<span class="chat-edited-tag">(diedit)</span>' : '';
-  let bubbleInner = `<div class="gchat-text" id="dm-text-${id}">${formatted}</div><div class="chat-bubble-time">${chatNow(m.createdAt)}${editedTag}${readTag}</div>`;
+  const replyQuote = m.replyTo ? `<div class="chat-reply-quote" onclick="dmScrollToMessage('${m.replyTo.id}')">↩ <b>${gchatEscape(m.replyTo.name)}</b>: ${gchatEscape((m.replyTo.text||'').slice(0,60))}</div>` : '';
+  let bubbleInner = `${replyQuote}<div class="gchat-text" id="dm-text-${id}">${formatted}</div><div class="chat-bubble-time">${chatNow(m.createdAt)}${editedTag}${readTag}</div>`;
 
+  bubbleInner += `<div class="chat-actions">` +
+    `<button class="chat-action-btn" onclick="dmSetReplyTarget('${id}')" title="Balas">↩️</button>`;
   if (isMine) {
-    bubbleInner += `<div class="chat-actions">` +
+    bubbleInner +=
       `<button class="chat-action-btn" onclick="dmStartEdit('${id}')" title="Edit">✏️</button>` +
-      `<button class="chat-action-btn" onclick="dmDeleteMessage('${id}')" title="Hapus">🗑️</button>` +
-      `</div>`;
+      `<button class="chat-action-btn" onclick="dmDeleteMessage('${id}')" title="Hapus">🗑️</button>`;
   }
+  bubbleInner += `</div>`;
 
   row.innerHTML =
     `${avatarHtml}` +
@@ -17912,6 +18087,26 @@ async function dmLeaveThread() {
   }
 }
 
+// Ngirim push notification ke user tertentu — dipanggil abis kirim pesan DM
+// (lihat dmSendMessage di bawah). Butuh Firebase ID token biar backend bisa
+// verifikasi identitas pengirim (lihat /api/push/send-dm di server.js);
+// makanya cuma jalan buat user yang login Google, sama seperti syarat DM
+// itu sendiri (dmRequireLogin/dmIsGoogleUser). Gagal diam-diam kalau target
+// belum pernah aktifin push notification sama sekali — itu situasi normal.
+async function sendPushToUser(toEmail, title, body) {
+  if (!fauth || !fauth.currentUser) return;
+  try {
+    const idToken = await fauth.currentUser.getIdToken();
+    await fetch(DL_API_BASE + '/api/push/send-dm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+      body: JSON.stringify({ toEmail, title, body })
+    });
+  } catch (e) {
+    console.warn('[Push] gagal kirim notif DM:', e);
+  }
+}
+
 async function dmSendMessage() {
   const session = dmRequireLogin();
   if (!session || !dmCurrentThreadId || !dmCurrentOther) return;
@@ -17922,9 +18117,13 @@ async function dmSendMessage() {
 
   const myEmail = session.email.toLowerCase();
   const threadRef = fdb.collection(DM_COLLECTION).doc(dmCurrentThreadId);
+  const replyPayload = dmReplyTarget ? { id: dmReplyTarget.id, name: dmReplyTarget.name, text: (dmReplyTarget.text || '').slice(0, 80) } : null;
+  dmCancelReply();
+  clearTimeout(dmTypingClearTimer);
+  threadRef.set({ typing: { [myEmail]: null } }, { merge: true }).catch(() => {});
 
   try {
-    await threadRef.collection('messages').add({ sender: myEmail, text, createdAt: Date.now(), read: false });
+    await threadRef.collection('messages').add({ sender: myEmail, text, createdAt: Date.now(), read: false, replyTo: replyPayload });
     await threadRef.set({
       lastMessage: text, lastMessageAt: Date.now(), lastSender: myEmail,
       unread: { [dmCurrentOther.email]: firebase.firestore.FieldValue.increment(1) }
@@ -18512,6 +18711,13 @@ window.addEventListener('load', () => {
 
   <!-- Input area -->
   <div style="padding:8px 16px 16px;max-width:640px;width:100%;margin:0 auto">
+    <div id="gchat-reply-bar" style="display:none;align-items:center;gap:8px;padding:6px 10px;margin-bottom:6px;background:var(--surface2);border-left:3px solid var(--accent);border-radius:8px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;color:var(--accent);font-weight:700">↩ Membalas <span id="gchat-reply-name"></span></div>
+        <div id="gchat-reply-text" style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      </div>
+      <button class="chat-action-btn" style="opacity:1;flex-shrink:0" onclick="gchatCancelReply()">✕</button>
+    </div>
     <div style="display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:8px 8px 8px 14px">
       <input type="file" id="gchat-file-input" accept="image/*" style="display:none" onchange="gchatOnFileSelected(event)">
       <button class="chat-upload-btn" onclick="gchatPickImage()" title="Kirim foto">
@@ -18576,10 +18782,17 @@ window.addEventListener('load', () => {
   <div class="chat-bubbles" id="dm-thread-bubbles-area" style="padding-bottom:8px"></div>
 
   <div style="padding:8px 16px 16px;max-width:640px;width:100%;margin:0 auto">
+    <div id="dm-reply-bar" style="display:none;align-items:center;gap:8px;padding:6px 10px;margin-bottom:6px;background:var(--surface2);border-left:3px solid var(--accent);border-radius:8px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;color:var(--accent);font-weight:700">↩ Membalas <span id="dm-reply-name"></span></div>
+        <div id="dm-reply-text" style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+      </div>
+      <button class="chat-action-btn" style="opacity:1;flex-shrink:0" onclick="dmCancelReply()">✕</button>
+    </div>
     <div style="display:flex;gap:8px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:8px 8px 8px 14px">
       <textarea class="chat-input-box" id="dm-thread-input" placeholder="Tulis pesan..." rows="1"
         onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();dmSendMessage()}"
-        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px'"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px';dmNotifyTyping()"
         style="border:none;background:transparent;padding:4px 0"></textarea>
       <button class="chat-send-btn" id="dm-thread-send-btn" onclick="dmSendMessage()" style="flex-shrink:0">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
