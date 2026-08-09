@@ -139,7 +139,7 @@ h1 .g{background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accen
   .actions-bar .btn{flex:1 1 auto;font-size:12px;padding:8px 10px;text-align:center;justify-content:center}
 }
 .btn{padding:8px 16px;border-radius:8px;font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;transition:transform .15s,box-shadow .15s,background .15s,border-color .15s,color .15s;border:none;-webkit-tap-highlight-color:transparent}
-.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}.btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(91,110,245,.3)}.btn-primary:active{transform:translateY(0) scale(.97)}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}.btn-primary:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(91,110,245,.3);box-shadow:0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent)}.btn-primary:active{transform:translateY(0) scale(.97)}
 .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
 .btn-danger{background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.25)}.btn-danger:hover{background:rgba(239,68,68,.22);transform:translateY(-1px)}
 .btn-green{background:linear-gradient(135deg,var(--green),#0ea56f);color:#fff}.btn-green:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(16,185,129,.3)}
@@ -167,8 +167,18 @@ h1 .g{background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accen
 .file-remove{background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;border-radius:4px;font-size:14px;flex-shrink:0;transition:color .2s,transform .15s}.file-remove:hover{color:var(--red);transform:scale(1.15)}
 .file-item-bot{margin-top:7px;padding-top:7px;border-top:1px solid var(--border)}
 .file-compress-info{font-size:11px;color:var(--green);font-family:var(--mono);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.download-btn{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.25);padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all .2s}
+.download-btn{background:rgba(16,185,129,.12);color:var(--green);border:1px solid rgba(16,185,129,.25);padding:4px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:background .2s,transform .15s;animation:dlGridIn .3s cubic-bezier(.2,.8,.3,1) both}
 .download-btn:hover{background:rgba(16,185,129,.22);transform:translateY(-1px)}
+.download-btn:active{transform:scale(.95)}
+/* Highlight khusus preset "Terbaik" biar langsung ketebak pilihan yang
+   direkomendasikan di antara semua opsi kualitas */
+.download-btn.dl-btn-best{background:var(--green);color:#fff;border-color:var(--green);font-weight:700}
+.download-btn.dl-btn-best:hover{filter:brightness(1.1)}
+@keyframes dlGridIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){.download-btn{animation:none}}
+.dl-result-in{animation:dlResultIn .35s cubic-bezier(.2,.8,.3,1)}
+@keyframes dlResultIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){.dl-result-in{animation:none}}
 .progress-bar-wrap{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
 .progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2),#ec4899);background-size:200% 100%;animation:progressShimmer 1.6s linear infinite;border-radius:2px;transition:width .3s ease;width:0%}
 @keyframes progressShimmer{0%{background-position:0% 0}100%{background-position:-200% 0}}
@@ -180,8 +190,8 @@ h1 .g{background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accen
 .panel-title::before{content:'';width:3px;height:12px;background:var(--accent);border-radius:2px}
 .field{margin-bottom:13px}
 .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:500}
-.field select,.field input[type="text"],.field input[type="number"]{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-family:var(--sans);font-size:12px;outline:none;transition:border-color .2s;-webkit-appearance:none;appearance:none}
-.field select:focus,.field input:focus{border-color:var(--accent)}
+.field select,.field input[type="text"],.field input[type="number"]{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:7px;font-family:var(--sans);font-size:12px;outline:none;transition:border-color .2s,box-shadow .2s;-webkit-appearance:none;appearance:none}
+.field select:focus,.field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,110,245,.12);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent)}
 .field select option{background:var(--surface)}
 .range-wrap{display:flex;align-items:center;gap:10px}
 .range-val{font-family:var(--mono);font-size:11px;color:var(--accent);min-width:34px;text-align:right}
@@ -341,20 +351,29 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 /* ═══ AUTH OVERLAY ═══ */
 #auth-overlay{position:fixed;inset:0;background:rgba(9,11,16,.97);backdrop-filter:blur(20px);z-index:1000;display:flex;align-items:center;justify-content:center}
 #auth-overlay.hidden{display:none}
-.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:36px 32px;width:380px;max-width:95vw}
+.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:36px 32px;width:380px;max-width:95vw;position:relative;animation:authBoxIn .35s cubic-bezier(.2,.8,.3,1);box-shadow:0 0 0 1px rgba(255,255,255,.03),0 20px 60px rgba(0,0,0,.4),0 0 90px -20px rgba(91,110,245,.35);box-shadow:0 0 0 1px rgba(255,255,255,.03),0 20px 60px rgba(0,0,0,.4),0 0 90px -20px color-mix(in srgb, var(--accent) 45%, transparent)}
+@keyframes authBoxIn{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media (prefers-reduced-motion:reduce){.auth-box{animation:none}}
 .auth-logo{display:flex;align-items:center;gap:10px;margin-bottom:28px;justify-content:center}
-.auth-logo-icon{width:38px;height:38px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.auth-logo-icon{width:38px;height:38px;background:linear-gradient(135deg,var(--accent),var(--accent2));border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 4px 14px rgba(91,110,245,.35);box-shadow:0 4px 14px color-mix(in srgb, var(--accent) 45%, transparent)}
 .auth-logo-text{font-size:20px;font-weight:700;letter-spacing:-.3px}.auth-logo-text span{color:var(--accent)}
 .auth-tabs{display:flex;gap:3px;background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:3px;margin-bottom:22px}
 .auth-tab{flex:1;padding:7px;border-radius:6px;background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;text-align:center}
 .auth-tab.active{background:var(--surface2);color:var(--text)}
 .auth-field{margin-bottom:14px}
 .auth-field label{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font-weight:500}
-.auth-field input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:10px 13px;border-radius:8px;font-family:var(--sans);font-size:13px;outline:none;transition:border-color .2s}
-.auth-field input:focus{border-color:var(--accent)}
-.auth-btn{width:100%;background:var(--accent);color:#fff;border:none;padding:11px;border-radius:9px;font-family:var(--sans);font-size:13px;font-weight:700;cursor:pointer;transition:all .2s;margin-top:4px}
-.auth-btn:hover{background:#4a5de0}
-.auth-btn:disabled{opacity:.45;cursor:not-allowed}
+.auth-field input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:10px 13px;border-radius:8px;font-family:var(--sans);font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s}
+.auth-field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(91,110,245,.12);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent)}
+/* Tombol submit disamain sama gradient aksen yang dipakai di seluruh app
+   (bubble chat, tombol kirim, dll) — sebelumnya warna solid var(--accent)
+   polos, beda sendiri dari elemen lain. Hover-nya SENGAJA gak hardcode
+   warna biru (#4a5de0 lama) karena itu gak ikut kalau aksennya di-custom
+   (fitur premium) — sekarang pakai filter brightness, otomatis ngikutin
+   warna aksen apa pun. */
+.auth-btn{width:100%;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border:none;padding:11px;border-radius:9px;font-family:var(--sans);font-size:13px;font-weight:700;cursor:pointer;transition:filter .2s,transform .15s;margin-top:4px}
+.auth-btn:hover{filter:brightness(1.1)}
+.auth-btn:active{transform:scale(.98)}
+.auth-btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
 .auth-divider{text-align:center;color:var(--muted);font-size:11px;margin:14px 0;position:relative}
 .auth-divider::before,.auth-divider::after{content:'';position:absolute;top:50%;width:calc(50% - 20px);height:1px;background:var(--border)}
 .auth-divider::before{left:0}.auth-divider::after{right:0}
@@ -971,9 +990,17 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .rank-my-pos{background:rgba(91,110,245,.1);border:1px solid rgba(91,110,245,.3);border-radius:8px;padding:10px 14px;text-align:center;margin-bottom:12px;font-size:12px}
 .rank-btn{display:flex;align-items:center;gap:8px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border:none;padding:7px 14px;border-radius:8px;font-family:var(--sans);font-size:11px;font-weight:600;cursor:pointer;transition:opacity .2s}
 .rank-btn:hover{opacity:.85}
-.btn-google{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:#fff;color:#333;border:1px solid #ddd;padding:10px;border-radius:9px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;margin-bottom:10px}
+.btn-google{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:#fff;color:#333;border:1px solid #ddd;padding:10px;border-radius:9px;font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:background .2s,box-shadow .2s,transform .15s;margin-bottom:10px}
 .btn-google:hover{background:#f8f8f8;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.btn-google:active{transform:scale(.98)}
+.btn-google:disabled{opacity:.75;cursor:not-allowed;transform:none}
 .btn-google img{width:18px;height:18px}
+/* Spinner buat status loading tombol Google (lihat _setGoogleBtnLoading di
+   JS) — dikasih warna biru khas Google (#4285F4) biar tetap senada sama
+   logo "G" multi-warna di tombolnya. */
+.btn-google-spinner{display:inline-block;width:14px;height:14px;border:2px solid #ddd;border-top-color:#4285F4;border-radius:50%;animation:btnGoogleSpin .7s linear infinite;vertical-align:middle}
+@keyframes btnGoogleSpin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.btn-google-spinner{animation:none;border-top-color:#4285F4;opacity:.8}}
 /* header user area improved */
 .hdr-user-wrap{display:flex;align-items:center;gap:6px}
 .hdr-avatar-btn{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;cursor:pointer;border:2px solid rgba(91,110,245,.4);transition:all .2s;flex-shrink:0;overflow:hidden;padding:0;position:relative}
@@ -1825,8 +1852,11 @@ body{padding-bottom:78px}
 
       <div id="dl-result" style="display:none;margin-top:14px">
         <div id="dl-status-badges" style="display:none;gap:6px;margin-bottom:8px;flex-wrap:wrap"></div>
-        <div style="display:flex;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px">
-          <img id="dl-thumb" src="" alt="" style="width:70px;height:70px;object-fit:cover;border-radius:8px;flex-shrink:0;background:var(--surface2)">
+        <div style="display:flex;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)">
+          <div style="position:relative;flex-shrink:0">
+            <img id="dl-thumb" src="" alt="" style="width:70px;height:70px;object-fit:cover;border-radius:8px;background:var(--surface2);box-shadow:0 2px 10px rgba(0,0,0,.25)">
+            <span id="dl-thumb-badge" style="position:absolute;bottom:-4px;right:-4px;font-size:12px;background:var(--surface);border:1.5px solid var(--border);border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;line-height:1"></span>
+          </div>
           <div style="min-width:0">
             <div id="dl-title" style="font-size:12px;font-weight:600;line-height:1.4;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical"></div>
             <div id="dl-meta" style="font-size:10px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:3px;flex-wrap:wrap"></div>
@@ -8557,6 +8587,17 @@ function dlFormatDuration(sec) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+// Badge kecil di pojok thumbnail hasil pencarian, biar platform videonya
+// langsung ketebak sekilas tanpa perlu baca teks meta di sebelahnya.
+function dlPlatformEmoji(platform) {
+  const map = {
+    'TikTok': '🎵', 'YouTube': '▶️', 'Instagram': '📸', 'Facebook': '👍',
+    'Twitter': '𝕏', 'X': '𝕏', 'Reddit': '👽', 'SoundCloud': '☁️',
+    'Twitch': '🎮', 'Pinterest': '📌'
+  };
+  return map[platform] || '🔗';
+}
+
 let dlCurrentDuration = 0; // detik, diisi tiap fetch info sukses — dipakai buat validasi trim
 
 function dlParseTimeToSeconds(str) {
@@ -8769,6 +8810,7 @@ async function dlFetchInfo() {
     }
 
     document.getElementById('dl-thumb').src = data.thumbnail || '';
+    document.getElementById('dl-thumb-badge').textContent = dlPlatformEmoji(data.platform);
     document.getElementById('dl-title').textContent = data.title || 'Video';
     dlLogUsageActivity(urlPlatform || data.platform);
     const metaParts = [
@@ -8852,11 +8894,12 @@ async function dlFetchInfo() {
     const hasVideoQuality = qualityList.some(q => !NON_VIDEO_QUALITIES.includes(q.value));
     document.getElementById('dl-format-wrap').style.display = hasVideoQuality ? 'block' : 'none';
 
-    qualityList.forEach(q => {
+    qualityList.forEach((q, i) => {
+        const isBest = q.value === 'best';
         const b = document.createElement('button');
-        b.className = 'download-btn';
-        b.style.cssText = 'width:100%;justify-content:center;display:flex;align-items:center;gap:4px';
-        b.textContent = '↓ ' + q.label;
+        b.className = 'download-btn' + (isBest ? ' dl-btn-best' : '');
+        b.style.cssText = 'width:100%;justify-content:center;display:flex;align-items:center;gap:4px;animation-delay:' + (Math.min(i, 10) * 0.04) + 's';
+        b.textContent = (isBest ? '⭐ ' : '↓ ') + q.label;
         b.onclick = () => {
           const isVideoQuality = !NON_VIDEO_QUALITIES.includes(q.value);
           const formatSel = document.getElementById('dl-format-select').value;
@@ -8867,6 +8910,7 @@ async function dlFetchInfo() {
       });
 
     resultEl.style.display = 'block';
+    resultEl.classList.remove('dl-result-in'); void resultEl.offsetWidth; resultEl.classList.add('dl-result-in');
     dlCurrentUrl = url;
     document.getElementById('dl-preview-btn').style.display = data.isPhotoSet ? 'none' : 'flex';
     document.getElementById('dl-audio-preview-btn').style.display = data.isPhotoSet ? 'none' : 'flex';
@@ -9364,6 +9408,7 @@ async function dlUseBookmark(uploaderUrl) {
   dlCurrentUploaderName = null;
   document.getElementById('dl-result').style.display = 'block';
   document.getElementById('dl-thumb').src = '';
+  document.getElementById('dl-thumb-badge').textContent = '';
   document.getElementById('dl-title').textContent = '👤 Profil Creator';
   document.getElementById('dl-meta').innerHTML = '';
   document.getElementById('dl-meta-extra').textContent = '';
@@ -12456,6 +12501,7 @@ async function doLoginGoogle() {
   }
   const provider = new firebase.auth.GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' }); // selalu munculkan pilihan akun
+  _setGoogleBtnLoading(true);
   try {
     const result = await fauth.signInWithPopup(provider);
     await gchatProcessGoogleUser(result.user);
@@ -12477,7 +12523,26 @@ async function doLoginGoogle() {
         alert('🔴 DEBUG GOOGLE LOGIN ERROR\n\nCode: ' + (e2.code || '-') + '\nMessage: ' + (e2.message || '-') + '\n\nScreenshot ini & kirim ke developer.');
       }
     }
+  } finally {
+    _setGoogleBtnLoading(false);
   }
+}
+
+// Toggle status loading di SEMUA tombol "...dengan Google" di halaman
+// sekaligus (tab Masuk & tab Daftar sama-sama manggil doLoginGoogle yang
+// sama), pakai class .btn-google — bukan ID spesifik, biar otomatis
+// kepakai di tab mana pun yang lagi aktif.
+function _setGoogleBtnLoading(loading) {
+  document.querySelectorAll('.btn-google').forEach(btn => {
+    if (loading) {
+      if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="btn-google-spinner"></span> Menghubungkan...';
+    } else {
+      btn.disabled = false;
+      if (btn.dataset.origHtml) { btn.innerHTML = btn.dataset.origHtml; delete btn.dataset.origHtml; }
+    }
+  });
 }
 
 // Tangani hasil login redirect (kalau popup tadi di-fallback ke redirect)
