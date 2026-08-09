@@ -179,6 +179,37 @@ h1 .g{background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accen
 .dl-result-in{animation:dlResultIn .35s cubic-bezier(.2,.8,.3,1)}
 @keyframes dlResultIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @media (prefers-reduced-motion:reduce){.dl-result-in{animation:none}}
+/* Progress fill visual di tombol download — diisi lewat CSS var --progress
+   (0%-100%) yang di-update JS pas dlDownload() jalan. isolation:isolate +
+   z-index:-1 di ::before biar fill-nya selalu di BELAKANG teks tombol,
+   gak perlu span pembungkus tambahan. .download-btn otomatis kepakai
+   (grid preset); tombol lain (musik/subtitle) opt-in lewat class
+   .dl-progress-btn di HTML-nya. */
+.download-btn,.dl-progress-btn{position:relative;overflow:hidden;isolation:isolate}
+.download-btn::before,.dl-progress-btn::before{content:'';position:absolute;inset:0;width:var(--progress,0%);background:rgba(91,110,245,.18);background:color-mix(in srgb, var(--accent) 18%, transparent);transition:width .2s linear;z-index:-1;pointer-events:none}
+/* Toggle switch modern buat checkbox on/off (trim, sponsorblock) —
+   gantiin checkbox default browser yang polos. Native <input> tetap ada
+   (cuma disembunyiin visualnya) biar accessibility & keyboard nav tetap
+   jalan normal. */
+.dl-toggle{position:relative;display:inline-block;width:34px;height:19px;flex-shrink:0}
+.dl-toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.dl-toggle-track{position:absolute;inset:0;background:var(--surface2);border:1px solid var(--border);border-radius:20px;transition:background .2s,border-color .2s}
+.dl-toggle-track::before{content:'';position:absolute;width:13px;height:13px;left:2px;top:2px;background:var(--muted);border-radius:50%;transition:transform .2s,background .2s}
+.dl-toggle input:checked ~ .dl-toggle-track{background:rgba(91,110,245,.25);border-color:var(--accent)}
+.dl-toggle input:checked ~ .dl-toggle-track{background:color-mix(in srgb, var(--accent) 25%, var(--surface2));border-color:var(--accent)}
+.dl-toggle input:checked ~ .dl-toggle-track::before{transform:translateX(15px);background:var(--accent)}
+.dl-toggle input:focus-visible ~ .dl-toggle-track{box-shadow:0 0 0 3px rgba(91,110,245,.2);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent)}
+@media (prefers-reduced-motion:reduce){.dl-toggle-track,.dl-toggle-track::before{transition:none}}
+/* Skeleton shimmer — placeholder animasi pas nunggu "Cek Video" diproses,
+   bentuknya niru layout kartu hasil (thumbnail + baris teks) */
+.dl-skeleton{display:flex;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px}
+.dl-skeleton-thumb{width:70px;height:70px;border-radius:8px;flex-shrink:0}
+.dl-skeleton-lines{flex:1;display:flex;flex-direction:column;gap:9px;justify-content:center;min-width:0}
+.dl-skeleton-line{height:10px;border-radius:4px}
+.dl-skeleton-thumb,.dl-skeleton-line{background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200% 100%;animation:dlSkeletonShimmer 1.4s ease-in-out infinite}
+@keyframes dlSkeletonShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){.dl-skeleton-thumb,.dl-skeleton-line{animation:none;opacity:.6}}
+#dl-subtitle-lang:focus,#dl-trim-start:focus,#dl-trim-end:focus{outline:none;border-color:var(--accent) !important;box-shadow:0 0 0 3px rgba(91,110,245,.12);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent)}
 .progress-bar-wrap{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
 .progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2),#ec4899);background-size:200% 100%;animation:progressShimmer 1.6s linear infinite;border-radius:2px;transition:width .3s ease;width:0%}
 @keyframes progressShimmer{0%{background-position:0% 0}100%{background-position:-200% 0}}
@@ -1850,6 +1881,14 @@ body{padding-bottom:78px}
         <div id="dl-batch-results" style="margin-top:10px;font-size:11px"></div>
       </div>
 
+      <div id="dl-skeleton" class="dl-skeleton" style="display:none;margin-top:14px">
+        <div class="dl-skeleton-thumb"></div>
+        <div class="dl-skeleton-lines">
+          <div class="dl-skeleton-line" style="width:88%"></div>
+          <div class="dl-skeleton-line" style="width:55%"></div>
+          <div class="dl-skeleton-line" style="width:35%"></div>
+        </div>
+      </div>
       <div id="dl-result" style="display:none;margin-top:14px">
         <div id="dl-status-badges" style="display:none;gap:6px;margin-bottom:8px;flex-wrap:wrap"></div>
         <div style="display:flex;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.12)">
@@ -1863,13 +1902,13 @@ body{padding-bottom:78px}
             <div id="dl-meta-extra" style="font-size:10px;color:var(--muted);margin-top:2px"></div>
           </div>
         </div>
-        <div id="dl-music-card" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;align-items:center;gap:8px">
+        <div id="dl-music-card" style="display:none;margin-top:8px;background:var(--bg);border:1px solid var(--border);border-left:2px solid var(--accent);border-radius:10px;padding:10px;align-items:center;gap:8px;box-shadow:0 3px 12px rgba(0,0,0,.12)">
           <span style="font-size:18px;flex-shrink:0">🎵</span>
           <div style="min-width:0;flex:1">
             <div style="font-size:9px;color:var(--muted)">Musik latar video ini</div>
             <div id="dl-music-name" style="font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
           </div>
-          <button class="btn btn-secondary" id="dl-music-download-btn" onclick="dlDownloadMusicQuick(this)" style="flex-shrink:0;font-size:10px;padding:6px 10px;white-space:nowrap">⬇️ Lagu</button>
+          <button class="btn btn-secondary dl-progress-btn" id="dl-music-download-btn" onclick="dlDownloadMusicQuick(this)" style="flex-shrink:0;font-size:10px;padding:6px 10px;white-space:nowrap">⬇️ Lagu</button>
         </div>
         <div id="dl-analysis-wrap" style="display:none;margin-top:8px">
           <button onclick="dlToggleAnalysis()" style="width:100%;display:flex;justify-content:space-between;align-items:center;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;font-size:11px;color:var(--text);cursor:pointer">
@@ -1911,8 +1950,8 @@ body{padding-bottom:78px}
           <div id="dl-download-all-results" style="margin-top:8px;font-size:11px"></div>
         </div>
         <div id="dl-trim-wrap" style="display:none;margin-top:10px">
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer">
-            <input type="checkbox" id="dl-trim-enable" onchange="dlToggleTrim()">
+          <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);cursor:pointer">
+            <span class="dl-toggle"><input type="checkbox" id="dl-trim-enable" onchange="dlToggleTrim()"><span class="dl-toggle-track"></span></span>
             ✂️ Potong durasi sebelum download
           </label>
           <div id="dl-trim-inputs" style="display:none;gap:8px;margin-top:8px;align-items:center">
@@ -1923,16 +1962,16 @@ body{padding-bottom:78px}
           </div>
         </div>
         <div id="dl-sponsorblock-wrap" style="display:none;margin-top:8px">
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);cursor:pointer">
-            <input type="checkbox" id="dl-sponsorblock-enable">
+          <label style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);cursor:pointer">
+            <span class="dl-toggle"><input type="checkbox" id="dl-sponsorblock-enable"><span class="dl-toggle-track"></span></span>
             ⏭️ Lewati sponsor/iklan/intro otomatis (data SponsorBlock)
           </label>
         </div>
-        <div id="dl-subtitle-wrap" style="display:none;margin-top:10px">
+        <div id="dl-subtitle-wrap" style="display:none;margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px;box-shadow:0 3px 12px rgba(0,0,0,.12)">
           <div style="font-size:11px;color:var(--muted);margin-bottom:6px">📝 Subtitle tersedia:</div>
           <div style="display:flex;gap:6px">
-            <select id="dl-subtitle-lang" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px"></select>
-            <button class="btn btn-secondary" onclick="dlDownloadSubtitle()" id="dl-subtitle-btn" style="flex-shrink:0;font-size:11px;padding:0 12px">↓ Unduh</button>
+            <select id="dl-subtitle-lang" style="flex:1;padding:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:12px"></select>
+            <button class="btn btn-secondary dl-progress-btn" onclick="dlDownloadSubtitle()" id="dl-subtitle-btn" style="flex-shrink:0;font-size:11px;padding:0 12px">↓ Unduh</button>
           </div>
         </div>
         <div id="dl-preview-wrap" style="display:none;margin-top:10px;border-radius:10px;overflow:hidden;background:#000;aspect-ratio:16/9">
@@ -8789,6 +8828,7 @@ async function dlFetchInfo() {
 
   btn.disabled = true; btn.textContent = '⏳ Memuat...';
   resultEl.style.display = 'none'; statusEl.textContent = '';
+  document.getElementById('dl-skeleton').style.display = 'flex';
   document.getElementById('dl-playlist-result').style.display = 'none';
   dlCurrentPlaylistUrls = [];
   dlResetPreview();
@@ -8943,6 +8983,7 @@ async function dlFetchInfo() {
     toast('Gagal mengambil video', 'error');
   } finally {
     btn.disabled = false; btn.textContent = '🔍 Cek Video';
+    document.getElementById('dl-skeleton').style.display = 'none';
   }
 }
 
@@ -9905,6 +9946,7 @@ function dlReuseHistory(url) {
 async function dlDownload(url, quality, btnEl, extraParams = {}) {
   const orig = btnEl.textContent;
   btnEl.disabled = true; btnEl.textContent = '⏳ Mengunduh...';
+  btnEl.style.setProperty('--progress', '0%');
   try {
     let dlUrl = DL_API_BASE + '/api/download?url=' + encodeURIComponent(url) + '&quality=' + encodeURIComponent(quality);
     for (const [k, v] of Object.entries(extraParams)) {
@@ -9932,6 +9974,7 @@ async function dlDownload(url, quality, btnEl, extraParams = {}) {
       const speed = dlFormatSpeed(p.speedBps);
       const eta = dlFormatEta(p.etaSeconds);
       btnEl.textContent = `⏳ ${p.percent}%${speed ? ' · ' + speed : ''}${eta ? ' · sisa ' + eta : ''}`;
+      btnEl.style.setProperty('--progress', p.percent + '%');
     });
     if (!res.ok) {
       let msg = 'Gagal mengunduh video';
@@ -9956,6 +9999,7 @@ async function dlDownload(url, quality, btnEl, extraParams = {}) {
     toast('❌ ' + (e.message || 'Gagal mengunduh video'), 'error');
   } finally {
     btnEl.disabled = false; btnEl.textContent = orig;
+    btnEl.style.setProperty('--progress', '0%');
   }
 }
 
