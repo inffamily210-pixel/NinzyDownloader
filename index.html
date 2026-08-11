@@ -209,7 +209,7 @@ h1 .g{background:linear-gradient(120deg,var(--accent),var(--accent2),var(--accen
 .dl-skeleton-thumb,.dl-skeleton-line{background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200% 100%;animation:dlSkeletonShimmer 1.4s ease-in-out infinite}
 @keyframes dlSkeletonShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.dl-skeleton-thumb,.dl-skeleton-line{animation:none;opacity:.6}}
-#dl-subtitle-lang:focus,#dl-trim-start:focus,#dl-trim-end:focus{outline:none;border-color:var(--accent) !important;box-shadow:0 0 0 3px rgba(91,110,245,.12);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent)}
+#dl-subtitle-lang:focus,#dl-trim-start:focus,#dl-trim-end:focus,#qrgen-input:focus,#qris-amount:focus{outline:none;border-color:var(--accent) !important;box-shadow:0 0 0 3px rgba(91,110,245,.12);box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent)}
 .progress-bar-wrap{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
 .progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2),#ec4899);background-size:200% 100%;animation:progressShimmer 1.6s linear infinite;border-radius:2px;transition:width .3s ease;width:0%}
 @keyframes progressShimmer{0%{background-position:0% 0}100%{background-position:-200% 0}}
@@ -234,6 +234,13 @@ input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;hei
 .tab{flex:1;padding:6px 8px;border-radius:6px;background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:11px;font-weight:500;cursor:pointer;transition:all .2s;text-align:center}
 .tab.active{background:var(--surface2);color:var(--text)}
 .tab-content{display:none}.tab-content.active{display:block}
+/* Mode switcher khusus tool QR/QRIS — SENGAJA pakai class sendiri (bukan
+   .tab/.tab-content) karena switchTab() global nyari .tab di SELURUH
+   halaman, jadi kalau dipakai ulang di sini bisa numpangi/reset tab
+   Kompres/Convert/dll yang lagi aktif di kartu lain. */
+.qr-mode-btn{flex:1;padding:6px 8px;border-radius:6px;background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:11px;font-weight:500;cursor:pointer;transition:all .2s;text-align:center}
+.qr-mode-btn.active{background:var(--surface2);color:var(--text)}
+.qr-mode-content{display:none}.qr-mode-content.active{display:block}
 
 /* TOGGLES */
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}.toggle-row:last-child{border-bottom:none}
@@ -1125,6 +1132,7 @@ body{padding-bottom:78px}
 <script src="https://cdn.jsdelivr.net/npm/fix-webm-duration@1.0.6/fix-webm-duration.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.js" crossorigin="anonymous"></script>
 <!-- FFmpeg.wasm v0.12.x — single-thread, TIDAK butuh SharedArrayBuffer/COEP header -->
 <!-- Tidak lagi pakai script tag sync; di-load via dynamic import di getFFmpegEngine() -->
 <script>
@@ -2019,6 +2027,65 @@ body{padding-bottom:78px}
       <div id="dl-status" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
     </div>
 
+    <!-- QR CODE & QRIS GENERATOR/SCANNER -->
+    <div class="tool-card">
+      <div class="tool-card-title">🔳 QR Code & QRIS Generator</div>
+      <div class="tool-card-desc">Buat QR code dari link/teks, atau baca isi QR code dari gambar — termasuk baca QRIS statis & tambahkan nominal.</div>
+
+      <div class="tab-bar">
+        <button class="qr-mode-btn active" id="qr-mode-gen-btn" onclick="qrSwitchMode('gen')">🔗 Generate QR</button>
+        <button class="qr-mode-btn" id="qr-mode-scan-btn" onclick="qrSwitchMode('scan')">📷 Scan / Baca QR</button>
+      </div>
+
+      <!-- MODE: GENERATE -->
+      <div class="qr-mode-content active" id="qr-mode-gen">
+        <div class="field">
+          <label>Link atau teks apa saja</label>
+          <textarea id="qrgen-input" rows="2" placeholder="https://... atau teks bebas" style="width:100%;box-sizing:border-box;resize:vertical;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--sans);font-size:12px;outline:none;transition:border-color .2s,box-shadow .2s"></textarea>
+        </div>
+        <button class="btn btn-primary" style="width:100%" onclick="qrGenerate()">🔳 Buat QR Code</button>
+        <div class="tool-result" id="qrgen-result" style="text-align:center">
+          <img id="qrgen-img" src="" alt="QR Code" style="width:200px;height:200px;border-radius:8px;background:#fff;padding:10px">
+          <div style="margin-top:10px">
+            <button class="btn btn-secondary" onclick="qrDownload('qrgen-img','qrcode.png')" style="font-size:11px;padding:7px 14px">⬇️ Unduh PNG</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODE: SCAN -->
+      <div class="qr-mode-content" id="qr-mode-scan">
+        <div class="tool-dropzone" id="qrscan-drop" onclick="document.getElementById('qrscan-input').click()" ondragover="toolDrag(event,'qrscan-drop')" ondragleave="toolDragLeave('qrscan-drop')" ondrop="toolDrop(event,'qrscan-drop',qrScanFile)">
+          <div class="icon">📷</div>
+          <p>Seret gambar berisi QR code, atau klik untuk pilih</p>
+        </div>
+        <input type="file" id="qrscan-input" accept="image/*" style="display:none" onchange="qrScanFile(this.files[0])">
+        <div class="tool-result" id="qrscan-result">
+          <div style="font-size:10px;color:var(--muted);margin-bottom:4px">Isi QR code:</div>
+          <div id="qrscan-text" style="font-size:12px;word-break:break-all;background:var(--surface2);border-radius:8px;padding:10px;line-height:1.5"></div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap" id="qrscan-actions"></div>
+
+          <!-- Muncul cuma kalau hasil scan terdeteksi format QRIS -->
+          <div id="qris-panel" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+            <div style="font-size:11px;font-weight:700;margin-bottom:6px">💳 Terdeteksi QRIS</div>
+            <div style="font-size:11px;color:var(--text);margin-bottom:2px">Merchant: <b id="qris-merchant-name">-</b></div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Kota: <span id="qris-merchant-city">-</span> · <span id="qris-static-badge"></span></div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:10px;line-height:1.6">⚠️ Cuma kolom <b>nominal</b> yang diubah — data merchant/penerima pembayaran TETAP SAMA persis seperti QRIS asli, gak bisa diganti di sini. Pastikan ini QRIS milikmu sendiri (atau yang kamu punya izin pakai) sebelum di-generate.</div>
+            <div class="field">
+              <label>Nominal (Rp)</label>
+              <input type="number" id="qris-amount" placeholder="cth: 25000" min="1" step="1" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;font-family:var(--sans);font-size:12px;outline:none;transition:border-color .2s,box-shadow .2s">
+            </div>
+            <button class="btn btn-primary" style="width:100%" onclick="qrisGenerateWithAmount()">🔳 Generate QRIS dengan Nominal Ini</button>
+            <div id="qris-gen-result" style="display:none;text-align:center;margin-top:12px">
+              <img id="qris-gen-img" src="" alt="QRIS dengan nominal" style="width:200px;height:200px;border-radius:8px;background:#fff;padding:10px">
+              <div style="margin-top:10px">
+                <button class="btn btn-secondary" onclick="qrDownload('qris-gen-img','qris.png')" style="font-size:11px;padding:7px 14px">⬇️ Unduh PNG</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- RIWAYAT PENGGUNA DOWNLOADER (aktivitas publik) -->
     <div class="tool-card" id="dl-activity-card">
       <div class="tool-card-title">🕒 Riwayat Pengguna Downloader</div>
@@ -2520,6 +2587,2040 @@ print(res.json())</pre>
   <div style="font-size:10px;color:var(--muted);text-align:center;margin-top:10px">Ninzy Ai bisa aja salah, cek ulang info penting ya.</div>
 </section>
 </div><!-- /main-section data-section="ninzyai" -->
+
+<!-- ═══ MANABOU — Belajar Bahasa Jepang (diintegrasikan dari proyek terpisah) ═══
+     Konten & logic-nya SEPENUHNYA dibungkus IIFE + di-scope ke #mnb-app,
+     jadi gak ada satu pun nama fungsi/variabel/class/selector CSS yang
+     bocor ke bagian NinzyCompress lain (sudah dicek manual satu-satu,
+     termasuk tabrakan nama switchTab() & class .tab yang tadinya bentrok
+     dengan punya NinzyCompress sendiri). -->
+<div class="main-section" data-section="manabou">
+  <div id="mnb-app"></div>
+</div><!-- /main-section data-section="manabou" -->
+
+<style>
+/* ═══ CSS Manabou — sudah di-scope ke #mnb-app, gak ada selector global
+     (body/h1/p/dst) yang bocor ke luar kontainer ini ═══ */
+
+#mnb-app{
+  --paper:#f7f2e7;
+  --paper-deep:#efe6d3;
+  --paper-line:#ddcfae;
+  --ink:#2b2620;
+  --ink-soft:#6b6152;
+  --indigo:#2c3e6b;
+  --indigo-deep:#1c2947;
+  --hanko:#a13a2f;
+  --hanko-deep:#7e2b22;
+  --correct:#2f6b45;
+  --wrong:#a13a2f;
+  --warn:#9c7423;
+}
+
+
+#mnb-app{
+  min-height:100vh;
+  background:var(--paper);
+  background-image:radial-gradient(circle at 20% 20%, rgba(0,0,0,0.02) 0, transparent 45%),
+    radial-gradient(circle at 80% 60%, rgba(0,0,0,0.02) 0, transparent 40%);
+  color:var(--ink);
+  font-family:'Zen Kaku Gothic New',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+#mnb-app button{font-family:inherit;}
+#mnb-app :focus-visible{outline:2px solid var(--indigo);outline-offset:2px;}
+#mnb-app h1,#mnb-app h2,#mnb-app h3{font-family:'Shippori Mincho',serif;margin:0;color:var(--ink);}
+#mnb-app p{margin:0;}
+@media (prefers-reduced-motion: reduce){
+  #mnb-app *{animation-duration:0.01ms !important;transition-duration:0.01ms !important;}
+}
+
+/* Header */
+.mnb-site-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px;border-bottom:1px solid var(--paper-line);
+  position:sticky;top:0;background:rgba(247,242,231,0.92);backdrop-filter:blur(6px);z-index:20;
+}
+.mnb-brand{display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;
+  font-family:'Shippori Mincho',serif;font-size:1.15rem;font-weight:700;color:var(--indigo-deep);padding:4px;}
+.mnb-brand .mark{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  background:var(--indigo-deep);color:var(--paper);border-radius:6px;font-size:1rem;}
+.mnb-header-actions{display:flex;align-items:center;gap:10px;}
+.mnb-nav-btn{background:var(--indigo-deep);color:var(--paper);border:none;padding:9px 16px;
+  border-radius:999px;font-size:.82rem;font-weight:700;cursor:pointer;transition:background .15s ease;white-space:nowrap;}
+.mnb-nav-btn:hover{background:var(--indigo);}
+.mnb-stat-pill{font-size:.78rem;color:var(--ink-soft);background:var(--paper-deep);
+  padding:6px 12px;border-radius:999px;white-space:nowrap;display:none;}
+@media (min-width:480px){.mnb-stat-pill{display:inline-block;}}
+
+/* Hero */
+.mnb-hero{position:relative;overflow:hidden;padding:52px 24px 40px;text-align:center;}
+.mnb-hero-kanji-bg{position:absolute;top:-40px;right:-20px;font-family:'Shippori Mincho',serif;
+  font-size:13rem;color:rgba(44,62,107,0.05);font-weight:700;line-height:1;pointer-events:none;user-select:none;}
+.mnb-hero-content{position:relative;max-width:640px;margin:0 auto;}
+.mnb-eyebrow{font-size:.82rem;letter-spacing:.14em;color:var(--hanko);font-weight:700;margin-bottom:10px;}
+.mnb-hero h1{font-size:clamp(1.6rem,5vw,2.3rem);line-height:1.3;margin-bottom:14px;}
+.mnb-hero p{color:var(--ink-soft);font-size:.98rem;line-height:1.65;}
+.mnb-cta{margin-top:22px;background:var(--hanko);color:#fff;border:none;padding:13px 28px;
+  border-radius:999px;font-size:.95rem;font-weight:700;cursor:pointer;box-shadow:0 6px 16px rgba(161,58,47,0.25);
+  transition:transform .15s ease, background .15s ease;}
+.mnb-cta:hover{background:var(--hanko-deep);transform:translateY(-1px);}
+
+/* Quick nav pills */
+.mnb-quicknav{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:24px;}
+.mnb-quicknav a{background:var(--paper-deep);border:1px solid var(--paper-line);color:var(--indigo);
+  text-decoration:none;padding:8px 16px;border-radius:999px;font-size:.8rem;font-weight:700;
+  transition:background .15s ease, color .15s ease;}
+.mnb-quicknav a:hover{background:var(--indigo);color:var(--paper);border-color:var(--indigo);}
+
+/* Materi sections (home) */
+.mnb-materi-section{max-width:1080px;margin:0 auto;padding:46px 24px 0;scroll-margin-top:74px;}
+.mnb-materi-section:last-of-type{padding-bottom:70px;}
+.mnb-materi-section-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;}
+.mnb-materi-section-head h2{font-size:1.3rem;}
+.mnb-materi-section-head .jp-sub{color:var(--ink-soft);font-size:.92rem;}
+.mnb-materi-section-desc{color:var(--ink-soft);font-size:.9rem;line-height:1.55;margin:0 0 18px;max-width:680px;}
+
+/* Category grid */
+.mnb-cat-grid{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;}
+.mnb-cat-card{background:var(--paper-deep);border:1px solid var(--paper-line);border-radius:14px;
+  padding:20px;text-align:left;cursor:pointer;transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  display:flex;flex-direction:column;gap:6px;}
+.mnb-cat-card:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(43,38,32,0.08);border-color:var(--indigo);}
+.mnb-cat-icon{font-family:'Shippori Mincho',serif;font-size:1.7rem;font-weight:700;color:var(--indigo-deep);}
+.mnb-cat-card h3{font-size:1.05rem;}
+.mnb-cat-card .jp-sub{font-size:.78rem;color:var(--ink-soft);}
+.mnb-cat-card p{font-size:.84rem;color:var(--ink-soft);line-height:1.5;margin-top:2px;}
+.mnb-cat-count{margin-top:auto;padding-top:10px;font-size:.78rem;font-weight:700;color:var(--indigo);}
+.mnb-cat-card.mix{background:linear-gradient(135deg, var(--indigo-deep), var(--indigo));}
+.mnb-cat-card.mix .mnb-cat-icon{color:var(--paper);}
+.mnb-cat-card.mix h3{color:var(--paper);}
+.mnb-cat-card.mix .jp-sub, .mnb-cat-card.mix p{color:rgba(247,242,231,0.75);}
+.mnb-cat-card.mix .mnb-cat-count{color:#fff;}
+
+/* Workspace */
+.mnb-workspace{max-width:760px;margin:0 auto;padding:24px 20px 60px;position:relative;overflow:hidden;}
+.mnb-workspace-bg-icon{position:absolute;top:-30px;right:-16px;font-family:'Shippori Mincho',serif;
+  font-size:11rem;color:rgba(44,62,107,0.045);font-weight:700;line-height:1;pointer-events:none;user-select:none;}
+.mnb-workspace-content{position:relative;}
+.mnb-back-btn{background:none;border:none;color:var(--ink-soft);font-size:.86rem;cursor:pointer;
+  padding:6px 0;margin-bottom:16px;font-weight:700;}
+.mnb-back-btn:hover{color:var(--indigo);}
+.mnb-ws-title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+.mnb-ws-title h2{font-size:1.4rem;}
+.mnb-ws-title .jp-sub{color:var(--ink-soft);font-size:.95rem;}
+.mnb-ws-desc{color:var(--ink-soft);font-size:.9rem;margin-top:6px;line-height:1.5;max-width:520px;}
+.mnb-tabs{display:flex;gap:8px;margin-top:20px;border-bottom:1px solid var(--paper-line);}
+.mnb-tab{background:none;border:none;padding:10px 16px;font-size:.88rem;font-weight:700;
+  color:var(--ink-soft);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+.mnb-tab.active{color:var(--indigo-deep);border-bottom-color:var(--hanko);}
+
+/* Study toolbar (card / list view toggle) */
+.mnb-study-toolbar{display:flex;justify-content:center;margin-top:22px;}
+.mnb-view-toggle{display:inline-flex;background:var(--paper-deep);border:1px solid var(--paper-line);
+  border-radius:999px;padding:3px;gap:2px;}
+.mnb-vtab{background:none;border:none;padding:8px 18px;border-radius:999px;font-size:.82rem;font-weight:700;
+  color:var(--ink-soft);cursor:pointer;transition:background .15s ease,color .15s ease;}
+.mnb-vtab.active{background:var(--indigo-deep);color:var(--paper);}
+.mnb-vtab:not(.active):hover{color:var(--indigo-deep);}
+
+/* Flashcards */
+.mnb-study-wrap{display:flex;flex-direction:column;align-items:center;padding-top:24px;}
+.mnb-progress-bar{width:100%;max-width:360px;height:5px;background:var(--paper-deep);border:1px solid var(--paper-line);
+  border-radius:999px;overflow:hidden;margin:0 auto 12px;}
+.mnb-progress-fill{height:100%;background:var(--hanko);border-radius:999px;transition:width .3s ease;}
+.mnb-study-progress{font-size:.8rem;color:var(--ink-soft);margin-bottom:14px;font-weight:700;}
+.mnb-flashcard{width:100%;max-width:360px;height:250px;perspective:1200px;cursor:pointer;}
+.mnb-flashcard-inner{position:relative;width:100%;height:100%;transition:transform .5s;
+  transform-style:preserve-3d;}
+.mnb-flashcard.flipped .mnb-flashcard-inner{transform:rotateY(180deg);}
+.mnb-flashcard-face{position:absolute;inset:0;backface-visibility:hidden;border-radius:18px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:22px;border:1px solid var(--paper-line);box-shadow:0 10px 26px rgba(43,38,32,0.1);}
+.mnb-flashcard-front{background:var(--paper-deep);background-image:radial-gradient(circle at 88% 12%, rgba(161,58,47,0.06) 0, transparent 40%);}
+.mnb-flashcard-front .big{font-family:'Shippori Mincho',serif;word-break:break-word;line-height:1.15;}
+.mnb-flashcard-front .big.size-xl{font-size:clamp(2.6rem,10vw,4rem);}
+.mnb-flashcard-front .big.size-lg{font-size:clamp(2.1rem,8.5vw,3.2rem);}
+.mnb-flashcard-front .big.size-md{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:clamp(1.5rem,6.5vw,2.3rem);line-height:1.3;}
+.mnb-flashcard-front .big.size-sm{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:clamp(1.1rem,5vw,1.7rem);line-height:1.4;}
+.mnb-flashcard.size-md,.mnb-flashcard.size-sm{height:280px;}
+.mnb-flashcard.size-sm .mnb-flashcard-back .romaji{font-size:1.05rem;}
+.mnb-flashcard.size-sm .mnb-flashcard-back .meaning{font-size:.9rem;line-height:1.4;}
+.mnb-flashcard.size-md .mnb-flashcard-back .romaji{font-size:1.22rem;}
+.mnb-flashcard-back{background:var(--indigo-deep);color:var(--paper);transform:rotateY(180deg);}
+.mnb-flashcard-back .romaji{font-size:1.4rem;font-weight:700;margin-bottom:8px;}
+.mnb-flashcard-back .meaning{font-size:1.05rem;color:rgba(247,242,231,0.85);}
+.mnb-flip-hint{position:absolute;bottom:14px;font-size:.72rem;color:var(--ink-soft);}
+.mnb-study-controls{display:flex;align-items:center;gap:18px;margin-top:22px;}
+.mnb-icon-btn{width:44px;height:44px;border-radius:50%;border:1px solid var(--paper-line);
+  background:var(--paper-deep);font-size:1.1rem;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;transition:background .15s ease;}
+.mnb-icon-btn:hover{background:#e4d8bb;}
+.mnb-listen-btn{margin-top:16px;background:none;border:1px solid var(--paper-line);color:var(--indigo-deep);
+  padding:8px 16px;border-radius:999px;font-size:.82rem;font-weight:700;cursor:pointer;transition:background .15s ease;}
+.mnb-listen-btn:hover{background:var(--paper-deep);}
+.mnb-kbd-hint{display:none;font-size:.74rem;color:var(--ink-soft);margin-top:16px;}
+@media (hover:hover) and (pointer:fine){.mnb-kbd-hint{display:block;}}
+.mnb-kbd-hint kbd{background:var(--paper-deep);border:1px solid var(--paper-line);border-radius:5px;
+  padding:1px 6px;font-family:inherit;font-size:.72rem;}
+
+/* Study list view */
+.mnb-study-list-wrap{padding-top:22px;}
+.mnb-list-search{width:100%;padding:12px 16px;border-radius:999px;border:1px solid var(--paper-line);
+  background:var(--paper-deep);color:var(--ink);font-size:.9rem;}
+.mnb-list-search::placeholder{color:var(--ink-soft);}
+.mnb-list-search:focus{outline:2px solid var(--indigo);outline-offset:1px;}
+.mnb-list-count{font-size:.78rem;color:var(--ink-soft);margin:10px 2px 12px;font-weight:700;}
+.mnb-list-view{display:flex;flex-direction:column;gap:8px;}
+@media (min-width:600px){.mnb-list-view{display:grid;grid-template-columns:1fr 1fr;gap:10px;}}
+.mnb-list-row{display:flex;flex-direction:column;gap:3px;background:var(--paper-deep);
+  border:1px solid var(--paper-line);border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer;
+  transition:border-color .15s ease,background .15s ease;}
+.mnb-list-row:hover{border-color:var(--indigo);background:#efe6d3;}
+.mnb-list-row-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.mnb-list-row-jp{font-family:'Shippori Mincho',serif;font-size:1.15rem;color:var(--indigo-deep);line-height:1.4;}
+.mnb-list-row-speak{background:none;border:none;font-size:1rem;cursor:pointer;padding:2px 6px;
+  flex-shrink:0;border-radius:50%;line-height:1.5;}
+.mnb-list-row-speak:hover{background:#e4d8bb;}
+.mnb-list-row-romaji{font-size:.85rem;font-weight:700;color:var(--ink);}
+.mnb-list-row-meaning{font-size:.8rem;color:var(--ink-soft);}
+.mnb-list-empty{text-align:center;color:var(--ink-soft);font-size:.88rem;padding:30px 0;grid-column:1/-1;}
+
+/* Quiz */
+.mnb-quiz-intro{text-align:center;padding:40px 10px;}
+.mnb-start-btn{margin-top:18px;background:var(--hanko);color:#fff;border:none;padding:13px 30px;
+  border-radius:999px;font-size:.95rem;font-weight:700;cursor:pointer;box-shadow:0 6px 16px rgba(161,58,47,0.25);}
+.mnb-start-btn:hover{background:var(--hanko-deep);}
+.mnb-quiz-head{display:flex;justify-content:space-between;font-size:.8rem;color:var(--ink-soft);
+  font-weight:700;margin-top:18px;margin-bottom:10px;}
+.mnb-stamp-row{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:16px;}
+.mnb-stamp-dot{width:9px;height:9px;border-radius:50%;background:var(--paper-line);}
+.mnb-stamp-dot.correct{background:var(--correct);}
+.mnb-stamp-dot.wrong{background:var(--wrong);}
+.mnb-stamp-dot.current{background:var(--indigo);box-shadow:0 0 0 3px rgba(44,62,107,0.18);}
+.mnb-quiz-card{position:relative;background:var(--paper-deep);border:1px solid var(--paper-line);
+  border-radius:16px;padding:34px 22px;text-align:center;min-height:150px;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;}
+.mnb-quiz-label{font-size:.82rem;color:var(--ink-soft);font-weight:700;margin-bottom:14px;}
+.mnb-prompt-jp{font-family:'Shippori Mincho',serif;line-height:1;word-break:break-word;}
+.mnb-prompt-jp.size-xl{font-size:clamp(3.4rem,17vw,5.4rem);}
+.mnb-prompt-jp.size-lg{font-size:clamp(1.7rem,6.5vw,2.6rem);}
+.mnb-prompt-jp.size-md{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:clamp(1.3rem,5.2vw,1.9rem);line-height:1.4;}
+.mnb-prompt-jp.size-sm{font-family:'Zen Kaku Gothic New',sans-serif;font-weight:700;font-size:clamp(1.05rem,4.2vw,1.55rem);line-height:1.5;}
+.mnb-prompt-text{font-size:clamp(1.3rem,4.5vw,1.8rem);font-weight:700;line-height:1.4;}
+.mnb-prompt-hint{margin-top:10px;font-size:.98rem;color:var(--ink-soft);}
+.mnb-options-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px;}
+@media (max-width:520px){.mnb-options-grid{grid-template-columns:1fr;}}
+.mnb-opt-btn{background:var(--paper-deep);border:1px solid var(--paper-line);border-radius:12px;
+  padding:15px;font-size:1.05rem;font-weight:700;cursor:pointer;transition:background .15s ease, border-color .15s ease;
+  color:var(--ink);}
+.mnb-opt-btn.opt-char{font-family:'Shippori Mincho',serif;font-size:1.7rem;}
+.mnb-opt-btn.opt-word{font-family:'Shippori Mincho',serif;font-size:1.2rem;}
+.mnb-opt-btn.opt-phrase{font-family:'Zen Kaku Gothic New',sans-serif;font-size:.98rem;line-height:1.4;text-align:left;}
+.mnb-opt-btn:hover:not(:disabled){border-color:var(--indigo);background:#efe6d3;}
+.mnb-opt-btn:disabled{cursor:default;}
+.mnb-opt-btn.is-correct{background:rgba(47,107,69,0.15);border-color:var(--correct);color:var(--correct);}
+.mnb-opt-btn.is-wrong{background:rgba(161,58,47,0.12);border-color:var(--wrong);color:var(--wrong);}
+.mnb-stamp-overlay{position:absolute;top:8px;right:14px;pointer-events:none;}
+.mnb-stamp-maru{width:52px;height:52px;border:5px solid var(--correct);border-radius:50%;
+  animation:stampIn .35s ease;opacity:.85;transform:rotate(-8deg);}
+.mnb-stamp-batsu{position:relative;width:52px;height:52px;animation:stampIn .35s ease;opacity:.85;}
+.mnb-stamp-batsu::before,.mnb-stamp-batsu::after{content:'';position:absolute;top:22px;left:2px;
+  width:48px;height:5px;background:var(--wrong);}
+.mnb-stamp-batsu::before{transform:rotate(45deg);}
+.mnb-stamp-batsu::after{transform:rotate(-45deg);}
+@keyframes stampIn{from{transform:scale(2.2) rotate(-8deg);opacity:0;}to{transform:scale(1) rotate(-8deg);opacity:.85;}}
+.mnb-quiz-foot{margin-top:18px;text-align:center;}
+.mnb-next-btn{background:var(--indigo-deep);color:var(--paper);border:none;padding:12px 28px;
+  border-radius:999px;font-size:.9rem;font-weight:700;cursor:pointer;}
+.mnb-next-btn:hover{background:var(--indigo);}
+
+/* Result */
+.mnb-result-wrap{text-align:center;padding-top:20px;}
+.mnb-score-ring{--pct:0;--ring-color:var(--indigo);width:156px;height:156px;border-radius:50%;
+  margin:16px auto 4px;display:flex;align-items:center;justify-content:center;
+  background:conic-gradient(var(--ring-color) calc(var(--pct)*1%), var(--paper-line) 0);
+  transition:background 1s ease;}
+.mnb-score-ring.tone-correct{--ring-color:var(--correct);}
+.mnb-score-ring.tone-warn{--ring-color:var(--warn);}
+.mnb-score-ring.tone-wrong{--ring-color:var(--hanko);}
+.mnb-score-ring-inner{width:120px;height:120px;border-radius:50%;background:var(--paper);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  box-shadow:inset 0 0 0 1px var(--paper-line);}
+.mnb-score-num{font-family:'Shippori Mincho',serif;font-size:1.9rem;font-weight:700;color:var(--ink);line-height:1;}
+.mnb-score-den{font-size:1.05rem;font-weight:600;color:var(--ink-soft);margin-left:1px;}
+.mnb-score-pct{font-size:.78rem;color:var(--ink-soft);font-weight:700;margin-top:5px;}
+.mnb-result-sub{color:var(--ink-soft);font-size:.92rem;margin-bottom:16px;}
+.mnb-result-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:8px;}
+.mnb-btn-outline{background:none;border:1px solid var(--paper-line);color:var(--ink);padding:12px 24px;
+  border-radius:999px;font-size:.88rem;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease;}
+.mnb-btn-outline:hover{border-color:var(--indigo);color:var(--indigo);}
+
+/* Result: mistake review */
+.mnb-review-list{margin-top:32px;text-align:left;}
+.mnb-review-heading{font-size:1.05rem;margin-bottom:4px;}
+.mnb-review-sub{font-size:.82rem;color:var(--ink-soft);margin-bottom:16px;line-height:1.5;}
+.mnb-review-group{background:var(--paper-deep);border:1px solid var(--paper-line);border-radius:16px;
+  padding:16px 18px;margin-bottom:12px;}
+.mnb-review-group-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  flex-wrap:wrap;margin-bottom:12px;}
+.mnb-cat-tag{display:inline-flex;align-items:center;gap:7px;color:var(--indigo-deep);font-size:.86rem;font-weight:700;}
+.mnb-cat-tag-icon{font-family:'Shippori Mincho',serif;font-size:1.05rem;background:var(--paper);
+  border:1px solid var(--paper-line);border-radius:8px;width:26px;height:26px;display:inline-flex;
+  align-items:center;justify-content:center;flex-shrink:0;}
+.mnb-review-restudy{background:none;border:1px solid var(--paper-line);color:var(--indigo-deep);
+  padding:6px 13px;border-radius:999px;font-size:.76rem;font-weight:700;cursor:pointer;white-space:nowrap;
+  transition:background .15s ease,border-color .15s ease;}
+.mnb-review-restudy:hover{background:var(--paper);border-color:var(--indigo);}
+.mnb-review-row{padding:11px 0;border-top:1px solid var(--paper-line);}
+.mnb-review-row:first-of-type{border-top:none;padding-top:0;}
+.mnb-review-q{font-size:.95rem;font-weight:700;color:var(--ink);margin-bottom:7px;line-height:1.4;}
+.mnb-review-answers{display:flex;flex-direction:column;gap:5px;}
+.mnb-review-your,.mnb-review-correct{font-size:.86rem;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;}
+.mnb-review-your{color:var(--wrong);}
+.mnb-review-correct{color:var(--correct);font-weight:700;}
+.mnb-review-label{font-size:.68rem;font-weight:700;color:var(--ink-soft);min-width:92px;flex-shrink:0;
+  text-transform:uppercase;letter-spacing:.04em;}
+.mnb-all-correct{color:var(--correct);margin-top:22px;font-weight:700;text-align:center;font-size:.95rem;}
+
+.mnb-site-footer{text-align:center;padding:30px 20px;color:var(--ink-soft);font-size:.8rem;}
+
+</style>
+<script>
+(function(){
+
+/* ================= DATA ================= */
+const HIRAGANA = [['あ','a'],['い','i'],['う','u'],['え','e'],['お','o'],['か','ka'],['き','ki'],['く','ku'],['け','ke'],['こ','ko'],['さ','sa'],['し','shi'],['す','su'],['せ','se'],['そ','so'],['た','ta'],['ち','chi'],['つ','tsu'],['て','te'],['と','to'],['な','na'],['に','ni'],['ぬ','nu'],['ね','ne'],['の','no'],['は','ha'],['ひ','hi'],['ふ','fu'],['へ','he'],['ほ','ho'],['ま','ma'],['み','mi'],['む','mu'],['め','me'],['も','mo'],['や','ya'],['ゆ','yu'],['よ','yo'],['ら','ra'],['り','ri'],['る','ru'],['れ','re'],['ろ','ro'],['わ','wa'],['を','wo'],['ん','n']]
+  .map(([jp,romaji])=>({jp,romaji,id:null}));
+
+const KATAKANA = [['ア','a'],['イ','i'],['ウ','u'],['エ','e'],['オ','o'],['カ','ka'],['キ','ki'],['ク','ku'],['ケ','ke'],['コ','ko'],['サ','sa'],['シ','shi'],['ス','su'],['セ','se'],['ソ','so'],['タ','ta'],['チ','chi'],['ツ','tsu'],['テ','te'],['ト','to'],['ナ','na'],['ニ','ni'],['ヌ','nu'],['ネ','ne'],['ノ','no'],['ハ','ha'],['ヒ','hi'],['フ','fu'],['ヘ','he'],['ホ','ho'],['マ','ma'],['ミ','mi'],['ム','mu'],['メ','me'],['モ','mo'],['ヤ','ya'],['ユ','yu'],['ヨ','yo'],['ラ','ra'],['リ','ri'],['ル','ru'],['レ','re'],['ロ','ro'],['ワ','wa'],['ヲ','wo'],['ン','n']]
+  .map(([jp,romaji])=>({jp,romaji,id:null}));
+
+const KOSAKATA = [
+  ['はい','hai','Ya'],
+  ['いいえ','iie','Tidak'],
+  ['ありがとう','arigatou','Terima kasih'],
+  ['すみません','sumimasen','Maaf / permisi'],
+  ['さようなら','sayounara','Selamat tinggal'],
+  ['私','watashi','Saya'],
+  ['あなた','anata','Kamu / Anda'],
+  ['彼','kare','Dia (laki-laki)'],
+  ['彼女','kanojo','Dia (perempuan)'],
+  ['私たち','watashitachi','Kami / kita'],
+  ['みんな','minna','Semua orang'],
+  ['何','nani','Apa'],
+  ['誰','dare','Siapa'],
+  ['どこ','doko','Mana'],
+  ['いつ','itsu','Kapan'],
+  ['どう','dou','Bagaimana'],
+  ['どうして','doushite','Kenapa / mengapa'],
+  ['いくつ','ikutsu','Berapa (jumlah)'],
+  ['どちら','dochira','Yang mana / sebelah mana'],
+  ['名前','namae','Nama'],
+  ['学生','gakusei','Murid / siswa'],
+  ['先生','sensei','Guru'],
+  ['学校','gakkou','Sekolah'],
+  ['友達','tomodachi','Teman'],
+  ['家族','kazoku','Keluarga'],
+  ['父','chichi','Ayah (menyebut milik sendiri)'],
+  ['母','haha','Ibu (menyebut milik sendiri)'],
+  ['本','hon','Buku'],
+  ['時間','jikan','Waktu'],
+  ['今日','kyou','Hari ini'],
+  ['明日','ashita','Besok'],
+  ['食べ物','tabemono','Makanan'],
+  ['飲み物','nomimono','Minuman'],
+  ['食べる','taberu','Makan'],
+  ['飲む','nomu','Minum'],
+  ['行く','iku','Pergi'],
+  ['来る','kuru','Datang'],
+  ['帰る','kaeru','Pulang'],
+  ['見る','miru','Melihat / menonton'],
+  ['聞く','kiku','Mendengar / bertanya'],
+  ['話す','hanasu','Berbicara'],
+  ['読む','yomu','Membaca'],
+  ['書く','kaku','Menulis'],
+  ['買う','kau','Membeli'],
+  ['する','suru','Melakukan'],
+  ['ある','aru','Ada (untuk benda)'],
+  ['いる','iru','Ada (untuk orang / hewan)'],
+  ['寝る','neru','Tidur'],
+  ['起きる','okiru','Bangun tidur'],
+  ['分かる','wakaru','Mengerti / paham'],
+  ['働く','hataraku','Bekerja'],
+  ['勉強する','benkyou suru','Belajar'],
+  ['いい','ii','Bagus / baik'],
+  ['悪い','warui','Buruk / jelek'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const KANJI = [
+  ['一','ichi','Satu'],
+  ['二','ni','Dua'],
+  ['三','san','Tiga'],
+  ['四','yon','Empat'],
+  ['五','go','Lima'],
+  ['六','roku','Enam'],
+  ['七','nana','Tujuh'],
+  ['八','hachi','Delapan'],
+  ['九','kyuu','Sembilan'],
+  ['十','juu','Sepuluh'],
+  ['百','hyaku','Seratus'],
+  ['千','sen','Seribu'],
+  ['万','man','Sepuluh ribu'],
+  ['人','hito','Orang'],
+  ['日','nichi','Hari / matahari'],
+  ['月','tsuki','Bulan'],
+  ['火','ka','Api'],
+  ['水','mizu','Air'],
+  ['木','ki','Pohon / kayu'],
+  ['金','kin','Emas / uang'],
+  ['土','tsuchi','Tanah'],
+  ['山','yama','Gunung'],
+  ['川','kawa','Sungai'],
+  ['大きい','ookii','Besar'],
+  ['小さい','chiisai','Kecil'],
+  ['中','naka','Tengah / dalam'],
+  ['上','ue','Atas'],
+  ['下','shita','Bawah'],
+  ['右','migi','Kanan'],
+  ['左','hidari','Kiri'],
+  ['前','mae','Depan'],
+  ['後','ushiro','Belakang'],
+  ['今','ima','Sekarang'],
+  ['年','toshi','Tahun'],
+  ['円','en','Yen (mata uang Jepang)'],
+  ['女','onna','Perempuan'],
+  ['男','otoko','Laki-laki'],
+  ['子','ko','Anak'],
+  ['気','ki','Semangat / perasaan'],
+  ['天','ten','Langit'],
+  ['雨','ame','Hujan'],
+  ['雪','yuki','Salju'],
+  ['花','hana','Bunga'],
+  ['車','kuruma','Mobil'],
+  ['駅','eki','Stasiun'],
+  ['国','kuni','Negara'],
+  ['語','go','Bahasa'],
+  ['話','hanashi','Cerita / bicara'],
+  ['力','chikara','Kekuatan'],
+  ['心','kokoro','Hati'],
+  ['手','te','Tangan'],
+  ['目','me','Mata'],
+  ['口','kuchi','Mulut'],
+  ['耳','mimi','Telinga'],
+  ['足','ashi','Kaki'],
+  ['新しい','atarashii','Baru'],
+  ['古い','furui','Lama'],
+  ['高い','takai','Tinggi / mahal'],
+  ['安い','yasui','Murah'],
+  ['長い','nagai','Panjang'],
+  ['時','toki','Waktu / saat'],
+  ['分','fun','Menit'],
+  ['半','han','Setengah'],
+  ['週','shuu','Minggu (satuan waktu)'],
+  ['毎','mai','Setiap (awalan)'],
+  ['友','tomo','Teman'],
+  ['体','karada','Tubuh'],
+  ['海','umi','Laut'],
+  ['空','sora','Langit / kosong'],
+  ['石','ishi','Batu'],
+  ['田','ta','Sawah'],
+  ['見る','miru','Melihat'],
+  ['聞く','kiku','Mendengar'],
+  ['行く','iku','Pergi'],
+  ['来る','kuru','Datang'],
+  ['出る','deru','Keluar'],
+  ['入る','hairu','Masuk'],
+  ['立つ','tatsu','Berdiri'],
+  ['休む','yasumu','Istirahat'],
+  ['会う','au','Bertemu'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const SALAM = [
+  ['おはよう','ohayou','Selamat pagi (santai)'],
+  ['おはようございます','ohayou gozaimasu','Selamat pagi (formal)'],
+  ['こんにちは','konnichiwa','Selamat siang / halo'],
+  ['こんばんは','konbanwa','Selamat malam'],
+  ['おやすみ','oyasumi','Selamat tidur (santai)'],
+  ['おやすみなさい','oyasumi nasai','Selamat tidur (formal)'],
+  ['はじめまして','hajimemashite','Salam kenal'],
+  ['どうぞよろしく','douzo yoroshiku','Senang berkenalan denganmu'],
+  ['よろしくお願いします','yoroshiku onegaishimasu','Mohon bantuannya'],
+  ['お元気ですか','ogenki desu ka','Apa kabar?'],
+  ['元気です','genki desu','Saya baik-baik saja'],
+  ['お名前は何ですか','onamae wa nan desu ka','Siapa nama Anda?'],
+  ['お久しぶりです','ohisashiburi desu','Lama tidak bertemu'],
+  ['どうも','doumo','Terima kasih / halo (santai, serbaguna)'],
+  ['ありがとうございます','arigatou gozaimasu','Terima kasih banyak'],
+  ['どういたしまして','dou itashimashite','Sama-sama'],
+  ['ごめんなさい','gomen nasai','Maaf'],
+  ['失礼します','shitsurei shimasu','Permisi'],
+  ['お邪魔します','ojama shimasu','Permisi (saat masuk rumah orang)'],
+  ['お邪魔しました','ojama shimashita','Permisi, saya pamit (setelah berkunjung)'],
+  ['お先に失礼します','osaki ni shitsurei shimasu','Permisi, saya pulang duluan'],
+  ['またね','mata ne','Sampai jumpa'],
+  ['また明日','mata ashita','Sampai jumpa besok'],
+  ['気をつけて','ki wo tsukete','Hati-hati ya'],
+  ['お疲れ様です','otsukaresama desu','Terima kasih atas kerja kerasnya'],
+  ['いってきます','ittekimasu','Saya berangkat (dari rumah)'],
+  ['いってらっしゃい','itterasshai','Hati-hati di jalan'],
+  ['ただいま','tadaima','Saya pulang'],
+  ['おかえりなさい','okaerinasai','Selamat datang kembali'],
+  ['乾杯','kanpai','Bersulang!'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const PERCAKAPAN = [
+  ['わかりました','wakarimashita','Saya mengerti'],
+  ['わかりません','wakarimasen','Saya tidak mengerti'],
+  ['知りません','shirimasen','Saya tidak tahu'],
+  ['そうですね','sou desu ne','Begitu ya / iya juga'],
+  ['本当ですか','hontou desu ka','Benarkah?'],
+  ['違います','chigaimasu','Bukan / salah'],
+  ['なるほど','naruhodo','Oh begitu / masuk akal'],
+  ['もう一度お願いします','mou ichido onegaishimasu','Tolong ulangi sekali lagi'],
+  ['ゆっくり話してください','yukkuri hanashite kudasai','Tolong bicara pelan-pelan'],
+  ['日本語が話せません','nihongo ga hanasemasen','Saya tidak bisa bahasa Jepang'],
+  ['英語を話せますか','eigo wo hanasemasu ka','Bisakah Anda bicara bahasa Inggris?'],
+  ['これは何ですか','kore wa nan desu ka','Ini apa?'],
+  ['いくらですか','ikura desu ka','Berapa harganya?'],
+  ['トイレはどこですか','toire wa doko desu ka','Toilet di mana?'],
+  ['ちょっと待ってください','chotto matte kudasai','Tunggu sebentar'],
+  ['お願いします','onegaishimasu','Tolong / mohon'],
+  ['手伝ってください','tetsudatte kudasai','Tolong bantu saya'],
+  ['もちろんです','mochiron desu','Tentu saja'],
+  ['大丈夫です','daijoubu desu','Tidak apa-apa / baik-baik saja'],
+  ['大丈夫ですか','daijoubu desu ka','Apakah kamu baik-baik saja?'],
+  ['気にしないで','ki ni shinaide','Jangan dipikirkan'],
+  ['がんばって','ganbatte','Semangat!'],
+  ['頑張ります','ganbarimasu','Saya akan berusaha'],
+  ['頑張ってください','ganbatte kudasai','Semangat, ya'],
+  ['大好きです','daisuki desu','Sangat suka'],
+  ['好きです','suki desu','Suka'],
+  ['嫌いです','kirai desu','Tidak suka / benci'],
+  ['おめでとうございます','omedetou gozaimasu','Selamat!'],
+  ['楽しいです','tanoshii desu','Menyenangkan'],
+  ['すごいですね','sugoi desu ne','Hebat, ya!'],
+  ['かわいいです','kawaii desu','Lucu / imut'],
+  ['大変です','taihen desu','Ini berat / merepotkan'],
+  ['忙しいです','isogashii desu','Sedang sibuk'],
+  ['疲れました','tsukaremashita','Saya lelah'],
+  ['お腹が空きました','onaka ga sukimashita','Saya lapar'],
+  ['のどが渇きました','nodo ga kawakimashita','Saya haus'],
+  ['眠いです','nemui desu','Saya mengantuk'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const RESTORAN = [
+  ['いらっしゃいませ','irasshaimase','Selamat datang (ucapan pelayan)'],
+  ['何名様ですか','nanmeisama desu ka','Berapa orang?'],
+  ['二人です','futari desu','Dua orang'],
+  ['メニューをください','menyuu wo kudasai','Tolong berikan menu'],
+  ['お決まりですか','okimari desu ka','Sudah menentukan pesanan?'],
+  ['おすすめは何ですか','osusume wa nan desu ka','Apa yang direkomendasikan?'],
+  ['注文お願いします','chuumon onegaishimasu','Saya mau pesan'],
+  ['これをください','kore wo kudasai','Tolong yang ini'],
+  ['お水をください','omizu wo kudasai','Tolong airnya'],
+  ['取り皿をください','torizara wo kudasai','Tolong piring kecil untuk berbagi'],
+  ['辛いですか','karai desu ka','Apakah pedas?'],
+  ['辛くしないでください','karaku shinaide kudasai','Tolong jangan pedas'],
+  ['アレルギーがあります','arerugii ga arimasu','Saya punya alergi'],
+  ['いただきます','itadakimasu','Selamat makan (sebelum makan)'],
+  ['とてもおいしいです','totemo oishii desu','Sangat enak'],
+  ['まずいです','mazui desu','Tidak enak (rasanya)'],
+  ['甘いです','amai desu','Manis'],
+  ['熱いです','atsui desu','Panas (makanan / benda)'],
+  ['冷たいです','tsumetai desu','Dingin (minuman / benda)'],
+  ['おかわりできますか','okawari dekimasu ka','Bisa tambah lagi?'],
+  ['お腹いっぱいです','onaka ippai desu','Saya sangat kenyang'],
+  ['ごちそうさまでした','gochisousama deshita','Terima kasih atas makanannya'],
+  ['お会計お願いします','okaikei onegaishimasu','Tolong bonnya'],
+  ['別々に払います','betsubetsu ni haraimasu','Bayar terpisah'],
+  ['一緒に払います','issho ni haraimasu','Bayar sekaligus'],
+  ['持ち帰りできますか','mochikaeri dekimasu ka','Bisa dibungkus bawa pulang?'],
+  ['ここで食べます','koko de tabemasu','Makan di sini'],
+  ['お持ち帰りで','omochikaeri de','Untuk dibawa pulang'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const BELANJA = [
+  ['これはいくらですか','kore wa ikura desu ka','Ini berapa harganya?'],
+  ['見せてください','misete kudasai','Tolong perlihatkan'],
+  ['見ているだけです','miteiru dake desu','Saya cuma lihat-lihat'],
+  ['高いです','takai desu','Mahal'],
+  ['安いです','yasui desu','Murah'],
+  ['少し安くできますか','sukoshi yasuku dekimasu ka','Bisa lebih murah sedikit?'],
+  ['割引はありますか','waribiki wa arimasu ka','Ada diskon?'],
+  ['試着できますか','shichaku dekimasu ka','Bisa dicoba (pakaian)?'],
+  ['他の色はありますか','hoka no iro wa arimasu ka','Ada warna lain?'],
+  ['他のはありますか','hoka no wa arimasu ka','Ada yang lain?'],
+  ['Sサイズはありますか','esu saizu wa arimasu ka','Ada ukuran S?'],
+  ['大きいサイズをください','ookii saizu wo kudasai','Tolong ukuran besar'],
+  ['小さいサイズをください','chiisai saizu wo kudasai','Tolong ukuran kecil'],
+  ['在庫はありますか','zaiko wa arimasu ka','Ada stoknya?'],
+  ['これにします','kore ni shimasu','Saya ambil yang ini'],
+  ['これをください','kore wo kudasai','Saya mau yang ini'],
+  ['カードは使えますか','kaado wa tsukaemasu ka','Bisa bayar pakai kartu?'],
+  ['現金でお願いします','genkin de onegaishimasu','Tolong bayar tunai'],
+  ['ポイントカードはありますか','pointo kaado wa arimasu ka','Punya kartu poin?'],
+  ['袋は要りますか','fukuro wa irimasu ka','Perlu kantong plastik?'],
+  ['袋は要りません','fukuro wa irimasen','Tidak perlu kantong'],
+  ['ラッピングできますか','rappingu dekimasu ka','Bisa dibungkus kado?'],
+  ['レシートをください','reshiito wo kudasai','Tolong berikan struk'],
+  ['返品したいです','henpin shitai desu','Saya mau mengembalikan barang'],
+  ['どこで買えますか','doko de kaemasu ka','Bisa beli di mana?'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const ARAH = [
+  ['ここはどこですか','koko wa doko desu ka','Ini di mana?'],
+  ['駅はどこですか','eki wa doko desu ka','Stasiun di mana?'],
+  ['この住所はどこですか','kono juusho wa doko desu ka','Alamat ini di mana?'],
+  ['まっすぐ行ってください','massugu itte kudasai','Silakan jalan lurus'],
+  ['右に曲がってください','migi ni magatte kudasai','Silakan belok kanan'],
+  ['左に曲がってください','hidari ni magatte kudasai','Silakan belok kiri'],
+  ['信号を渡ってください','shingou wo watatte kudasai','Tolong seberangi lampu merah'],
+  ['突き当たりです','tsukiatari desu','Di ujung jalan'],
+  ['この辺りです','kono atari desu','Di sekitar sini'],
+  ['近いですか','chikai desu ka','Apakah dekat?'],
+  ['遠いですか','tooi desu ka','Apakah jauh?'],
+  ['歩いて行けますか','aruite ikemasu ka','Bisa jalan kaki ke sana?'],
+  ['何分かかりますか','nanpun kakarimasu ka','Berapa lama waktunya?'],
+  ['地図を見せてください','chizu wo misete kudasai','Tolong tunjukkan petanya'],
+  ['案内してください','annai shite kudasai','Tolong antar / tunjukkan jalan'],
+  ['切符はどこで買えますか','kippu wa doko de kaemasu ka','Tiket bisa dibeli di mana?'],
+  ['この電車は渋谷に行きますか','kono densha wa Shibuya ni ikimasu ka','Apakah kereta ini ke Shibuya?'],
+  ['次の駅は何ですか','tsugi no eki wa nan desu ka','Stasiun berikutnya apa?'],
+  ['どのバスに乗ればいいですか','dono basu ni noreba ii desu ka','Naik bus yang mana?'],
+  ['乗り換えが必要です','norikae ga hitsuyou desu','Perlu pindah kereta / transit'],
+  ['ここで降ります','koko de orimasu','Saya turun di sini'],
+  ['タクシーを呼んでください','takushii wo yonde kudasai','Tolong panggilkan taksi'],
+  ['道に迷いました','michi ni mayoimashita','Saya tersesat'],
+  ['出口はどこですか','deguchi wa doko desu ka','Pintu keluar di mana?'],
+  ['入口はどこですか','iriguchi wa doko desu ka','Pintu masuk di mana?'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const PERJALANAN = [
+  ['パスポートをお願いします','pasupooto wo onegaishimasu','Tolong paspornya'],
+  ['税関はどこですか','zeikan wa doko desu ka','Bea cukai di mana?'],
+  ['荷物が見つかりません','nimotsu ga mitsukarimasen','Bagasi saya tidak ditemukan'],
+  ['荷物を預けたいです','nimotsu wo azuketai desu','Saya ingin menitipkan barang'],
+  ['搭乗券はこちらです','toujouken wa kochira desu','Ini boarding pass-nya'],
+  ['何番ゲートですか','nanban geeto desu ka','Gerbang nomor berapa?'],
+  ['飛行機は何時に出発しますか','hikouki wa nanji ni shuppatsu shimasu ka','Pesawat berangkat jam berapa?'],
+  ['遅れています','okurete imasu','Sedang terlambat / delay'],
+  ['両替できますか','ryougae dekimasu ka','Bisa tukar uang?'],
+  ['免税店はどこですか','menzeiten wa doko desu ka','Toko bebas pajak di mana?'],
+  ['チェックインお願いします','chekkuin onegaishimasu','Saya mau check-in'],
+  ['予約しています','yoyaku shite imasu','Saya sudah reservasi'],
+  ['予約していません','yoyaku shite imasen','Saya belum reservasi'],
+  ['何泊しますか','nanpaku shimasu ka','Menginap berapa malam?'],
+  ['二泊します','nihaku shimasu','Menginap dua malam'],
+  ['部屋を見せてください','heya wo misete kudasai','Tolong tunjukkan kamarnya'],
+  ['静かな部屋がいいです','shizukana heya ga ii desu','Saya mau kamar yang tenang'],
+  ['エレベーターはどこですか','erebeetaa wa doko desu ka','Lift di mana?'],
+  ['Wi-Fiのパスワードは何ですか','waifai no pasuwaado wa nan desu ka','Apa kata sandi Wi-Fi-nya?'],
+  ['タオルをもう一枚ください','taoru wo mou ichimai kudasai','Tolong tambah satu handuk lagi'],
+  ['朝食は何時からですか','choushoku wa nanji kara desu ka','Sarapan mulai jam berapa?'],
+  ['市内地図はありますか','shinai chizu wa arimasu ka','Ada peta kota?'],
+  ['チェックアウトお願いします','chekkuauto onegaishimasu','Saya mau check-out'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const DARURAT = [
+  ['助けてください','tasukete kudasai','Tolong saya!'],
+  ['危ないです','abunai desu','Berbahaya! / Awas!'],
+  ['大丈夫ですか','daijoubu desu ka','Apakah Anda baik-baik saja?'],
+  ['救急車を呼んでください','kyuukyuusha wo yonde kudasai','Tolong panggil ambulans'],
+  ['警察を呼んでください','keisatsu wo yonde kudasai','Tolong panggil polisi'],
+  ['病院はどこですか','byouin wa doko desu ka','Rumah sakit di mana?'],
+  ['具合が悪いです','guai ga warui desu','Saya merasa tidak enak badan'],
+  ['気分が悪いです','kibun ga warui desu','Saya merasa mual / tidak enak'],
+  ['頭が痛いです','atama ga itai desu','Kepala saya sakit'],
+  ['お腹が痛いです','onaka ga itai desu','Perut saya sakit'],
+  ['熱があります','netsu ga arimasu','Saya demam'],
+  ['息ができません','iki ga dekimasen','Saya tidak bisa bernapas'],
+  ['けがをしました','kega wo shimashita','Saya terluka'],
+  ['火傷しました','yakedo shimashita','Saya terbakar (luka bakar)'],
+  ['骨折しました','kossetsu shimashita','Saya patah tulang'],
+  ['アレルギーがあります','arerugii ga arimasu','Saya punya alergi'],
+  ['薬はありますか','kusuri wa arimasu ka','Ada obat?'],
+  ['保険証を持っています','hokenshou wo motte imasu','Saya punya kartu asuransi'],
+  ['火事です','kaji desu','Kebakaran!'],
+  ['泥棒です','dorobou desu','Pencuri!'],
+  ['財布をなくしました','saifu wo nakushimashita','Dompet saya hilang'],
+  ['すぐに来てください','sugu ni kite kudasai','Tolong datang segera'],
+  ['落ち着いてください','ochitsuite kudasai','Tolong tenang'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const TELEPON = [
+  ['もしもし','moshi moshi','Halo (saat menelepon)'],
+  ['田中です','Tanaka desu','Ini Tanaka (menyebut nama sendiri di telepon)'],
+  ['何のご用件ですか','nan no goyouken desu ka','Ada keperluan apa ya?'],
+  ['少々お待ちください','shoushou omachi kudasai','Mohon tunggu sebentar'],
+  ['電話に出られません','denwa ni deraremasen','Tidak bisa mengangkat telepon'],
+  ['後でかけ直します','ato de kakenaoshimasu','Saya akan telepon lagi nanti'],
+  ['折り返し電話します','orikaeshi denwa shimasu','Saya akan menelepon balik'],
+  ['留守番電話です','rusuban denwa desu','Ini mesin penjawab'],
+  ['電波が悪いです','denpa ga warui desu','Sinyalnya buruk'],
+  ['充電が切れそうです','juuden ga kiresou desu','Baterai hampir habis'],
+  ['電話番号を教えてください','denwa bangou wo oshiete kudasai','Tolong beri nomor teleponnya'],
+  ['メールアドレスは何ですか','meeru adoresu wa nan desu ka','Apa alamat emailnya?'],
+  ['何時に会いましょうか','nanji ni aimashou ka','Jam berapa kita bertemu?'],
+  ['三時でいいですか','sanji de ii desu ka','Jam 3 boleh?'],
+  ['場所はどこですか','basho wa doko desu ka','Tempatnya di mana?'],
+  ['予定を変更できますか','yotei wo henkou dekimasu ka','Bisa ubah jadwal?'],
+  ['遅れてすみません','okurete sumimasen','Maaf saya terlambat'],
+  ['すぐ行きます','sugu ikimasu','Saya segera ke sana'],
+  ['また連絡します','mata renraku shimasu','Saya akan hubungi lagi'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const ANGKA = [
+  ['ゼロ','zero','Nol'],
+  ['一','ichi','Satu'],
+  ['二','ni','Dua'],
+  ['三','san','Tiga'],
+  ['四','yon','Empat'],
+  ['五','go','Lima'],
+  ['六','roku','Enam'],
+  ['七','nana','Tujuh'],
+  ['八','hachi','Delapan'],
+  ['九','kyuu','Sembilan'],
+  ['十','juu','Sepuluh'],
+  ['十一','juuichi','Sebelas'],
+  ['十二','juuni','Dua belas'],
+  ['十三','juusan','Tiga belas'],
+  ['十四','juuyon','Empat belas'],
+  ['十五','juugo','Lima belas'],
+  ['十六','juuroku','Enam belas'],
+  ['十七','juunana','Tujuh belas'],
+  ['十八','juuhachi','Delapan belas'],
+  ['十九','juukyuu','Sembilan belas'],
+  ['二十','nijuu','Dua puluh'],
+  ['三十','sanjuu','Tiga puluh'],
+  ['四十','yonjuu','Empat puluh'],
+  ['五十','gojuu','Lima puluh'],
+  ['六十','rokujuu','Enam puluh'],
+  ['七十','nanajuu','Tujuh puluh'],
+  ['八十','hachijuu','Delapan puluh'],
+  ['九十','kyuujuu','Sembilan puluh'],
+  ['百','hyaku','Seratus'],
+  ['二百','nihyaku','Dua ratus'],
+  ['三百','sanbyaku','Tiga ratus'],
+  ['四百','yonhyaku','Empat ratus'],
+  ['五百','gohyaku','Lima ratus'],
+  ['六百','roppyaku','Enam ratus'],
+  ['七百','nanahyaku','Tujuh ratus'],
+  ['八百','happyaku','Delapan ratus'],
+  ['九百','kyuuhyaku','Sembilan ratus'],
+  ['千','sen','Seribu'],
+  ['二千','nisen','Dua ribu'],
+  ['三千','sanzen','Tiga ribu'],
+  ['四千','yonsen','Empat ribu'],
+  ['五千','gosen','Lima ribu'],
+  ['六千','rokusen','Enam ribu'],
+  ['七千','nanasen','Tujuh ribu'],
+  ['八千','hassen','Delapan ribu'],
+  ['九千','kyuusen','Sembilan ribu'],
+  ['一万','ichiman','Sepuluh ribu'],
+  ['十万','juuman','Seratus ribu'],
+  ['百万','hyakuman','Satu juta'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const WAKTU = [
+  ['月曜日','getsuyoubi','Senin'],
+  ['火曜日','kayoubi','Selasa'],
+  ['水曜日','suiyoubi','Rabu'],
+  ['木曜日','mokuyoubi','Kamis'],
+  ['金曜日','kinyoubi','Jumat'],
+  ['土曜日','doyoubi','Sabtu'],
+  ['日曜日','nichiyoubi','Minggu'],
+  ['一月','ichigatsu','Januari'],
+  ['二月','nigatsu','Februari'],
+  ['三月','sangatsu','Maret'],
+  ['四月','shigatsu','April'],
+  ['五月','gogatsu','Mei'],
+  ['六月','rokugatsu','Juni'],
+  ['七月','shichigatsu','Juli'],
+  ['八月','hachigatsu','Agustus'],
+  ['九月','kugatsu','September'],
+  ['十月','juugatsu','Oktober'],
+  ['十一月','juuichigatsu','November'],
+  ['十二月','juunigatsu','Desember'],
+  ['一昨日','ototoi','Kemarin lusa'],
+  ['昨日','kinou','Kemarin'],
+  ['今日','kyou','Hari ini'],
+  ['明日','ashita','Besok'],
+  ['明後日','asatte','Lusa'],
+  ['先週','senshuu','Minggu lalu'],
+  ['今週','konshuu','Minggu ini'],
+  ['来週','raishuu','Minggu depan'],
+  ['先月','sengetsu','Bulan lalu'],
+  ['今月','kongetsu','Bulan ini'],
+  ['来月','raigetsu','Bulan depan'],
+  ['一昨年','ototoshi','Dua tahun lalu'],
+  ['去年','kyonen','Tahun lalu'],
+  ['今年','kotoshi','Tahun ini'],
+  ['来年','rainen','Tahun depan'],
+  ['再来年','sarainen','Dua tahun lagi'],
+  ['毎日','mainichi','Setiap hari'],
+  ['毎週','maishuu','Setiap minggu'],
+  ['毎月','maitsuki','Setiap bulan'],
+  ['毎年','maitoshi','Setiap tahun'],
+  ['明け方','akegata','Dini hari / subuh'],
+  ['朝','asa','Pagi'],
+  ['正午','shougo','Tengah hari (jam 12 siang)'],
+  ['昼','hiru','Siang'],
+  ['夕方','yuugata','Sore'],
+  ['夜','yoru','Malam'],
+  ['真夜中','mayonaka','Tengah malam'],
+  ['午前','gozen','Pagi (sebelum tengah hari)'],
+  ['午後','gogo','Siang / sore (setelah tengah hari)'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const KELUARGA = [
+  ['赤ちゃん','akachan','Bayi'],
+  ['姉','ane','Kakak perempuan'],
+  ['兄','ani','Kakak laki-laki'],
+  ['双子','futago','Anak kembar'],
+  ['義母','gibo','Ibu mertua'],
+  ['義父','gifu','Ayah mertua'],
+  ['一人っ子','hitorikko','Anak tunggal'],
+  ['妹','imouto','Adik perempuan'],
+  ['いとこ','itoko','Sepupu'],
+  ['兄弟','kyoudai','Saudara kandung'],
+  ['孫','mago','Cucu'],
+  ['姪','mei','Keponakan perempuan'],
+  ['息子','musuko','Anak laki-laki'],
+  ['娘','musume','Anak perempuan'],
+  ['おばあさん','obaasan','Nenek'],
+  ['おばさん','obasan','Bibi'],
+  ['甥','oi','Keponakan laki-laki'],
+  ['おじいさん','ojiisan','Kakek'],
+  ['おじさん','ojisan','Paman'],
+  ['お母さん','okaasan','Ibu (panggilan)'],
+  ['お姉さん','oneesan','Kakak perempuan (panggilan)'],
+  ['お兄さん','oniisan','Kakak laki-laki (panggilan)'],
+  ['お父さん','otousan','Ayah (panggilan)'],
+  ['弟','otouto','Adik laki-laki'],
+  ['夫','otto','Suami'],
+  ['両親','ryoushin','Orang tua (ayah & ibu)'],
+  ['親戚','shinseki','Kerabat / saudara jauh'],
+  ['祖母','sobo','Nenek (menyebut milik sendiri)'],
+  ['祖父','sofu','Kakek (menyebut milik sendiri)'],
+  ['妻','tsuma','Istri'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const TUBUH = [
+  ['顎','ago','Dagu / rahang'],
+  ['足','ashi','Kaki'],
+  ['頭','atama','Kepala'],
+  ['血','chi','Darah'],
+  ['歯','ha','Gigi'],
+  ['肺','hai','Paru-paru'],
+  ['鼻','hana','Hidung'],
+  ['皮膚','hifu','Kulit'],
+  ['額','hitai','Dahi'],
+  ['膝','hiza','Lutut'],
+  ['骨','hone','Tulang'],
+  ['胃','i','Lambung'],
+  ['髪','kami','Rambut'],
+  ['顔','kao','Wajah'],
+  ['肩','kata','Bahu'],
+  ['筋肉','kinniku','Otot'],
+  ['声','koe','Suara'],
+  ['腰','koshi','Pinggang'],
+  ['首','kubi','Leher'],
+  ['口','kuchi','Mulut'],
+  ['唇','kuchibiru','Bibir'],
+  ['まつげ','matsuge','Bulu mata'],
+  ['眉毛','mayuge','Alis'],
+  ['目','me','Mata'],
+  ['耳','mimi','Telinga'],
+  ['脳','nou','Otak'],
+  ['お腹','onaka','Perut'],
+  ['背中','senaka','Punggung'],
+  ['心臓','shinzou','Jantung'],
+  ['舌','shita','Lidah'],
+  ['手','te','Tangan'],
+  ['爪','tsume','Kuku'],
+  ['腕','ude','Lengan'],
+  ['指','yubi','Jari'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const WARNA = [
+  ['藍色','aiiro','Biru nila / indigo'],
+  ['赤','aka','Merah'],
+  ['青','ao','Biru'],
+  ['ベージュ','beeju','Krem'],
+  ['茶色','chairo','Cokelat'],
+  ['銀色','gin\'iro','Warna perak'],
+  ['灰色','haiiro','Abu-abu'],
+  ['黄色','kiiro','Kuning'],
+  ['黄緑','kimidori','Hijau kekuningan'],
+  ['金色','kin\'iro','Warna emas'],
+  ['紺色','kon\'iro','Biru dongker'],
+  ['黒','kuro','Hitam'],
+  ['緑','midori','Hijau'],
+  ['水色','mizuiro','Biru muda'],
+  ['桃色','momoiro','Merah muda (istilah tradisional)'],
+  ['紫','murasaki','Ungu'],
+  ['オレンジ','orenji','Oranye'],
+  ['黄土色','oudoiro','Cokelat oker'],
+  ['ピンク','pinku','Merah muda'],
+  ['白','shiro','Putih'],
+  ['空色','sorairo','Biru langit'],
+  ['山吹色','yamabukiiro','Kuning keemasan'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const MAKANAN = [
+  ['アイスクリーム','aisukuriimu','Es krim'],
+  ['ビール','biiru','Bir'],
+  ['チーズ','chiizu','Keju'],
+  ['ご飯','gohan','Nasi'],
+  ['餃子','gyouza','Pangsit goreng (gyoza)'],
+  ['牛乳','gyuunyuu','Susu'],
+  ['ジュース','juusu','Jus'],
+  ['唐揚げ','karaage','Ayam goreng ala Jepang'],
+  ['カレー','karee','Kari'],
+  ['カツ丼','katsudon','Katsudon (nasi topping katsu)'],
+  ['コーヒー','koohii','Kopi'],
+  ['果物','kudamono','Buah'],
+  ['抹茶','maccha','Teh hijau matcha'],
+  ['麺','men','Mie'],
+  ['味噌','miso','Pasta miso'],
+  ['味噌汁','misoshiru','Sup miso'],
+  ['納豆','nattou','Natto (kedelai fermentasi)'],
+  ['肉','niku','Daging'],
+  ['お茶','ocha','Teh'],
+  ['お好み焼き','okonomiyaki','Okonomiyaki'],
+  ['おにぎり','onigiri','Onigiri (nasi kepal)'],
+  ['お酒','osake','Sake / minuman beralkohol'],
+  ['親子丼','oyakodon','Oyakodon (nasi topping ayam & telur)'],
+  ['パン','pan','Roti'],
+  ['ラーメン','raamen','Ramen'],
+  ['魚','sakana','Ikan'],
+  ['刺身','sashimi','Sashimi (ikan mentah)'],
+  ['砂糖','satou','Gula'],
+  ['塩','shio','Garam'],
+  ['醤油','shouyu','Kecap asin'],
+  ['そば','soba','Soba'],
+  ['寿司','sushi','Sushi'],
+  ['たこ焼き','takoyaki','Takoyaki (bola gurita)'],
+  ['卵','tamago','Telur'],
+  ['天ぷら','tenpura','Tempura'],
+  ['とんかつ','tonkatsu','Tonkatsu (babi goreng tepung)'],
+  ['豆腐','toufu','Tahu'],
+  ['うどん','udon','Udon'],
+  ['わさび','wasabi','Wasabi'],
+  ['焼きそば','yakisoba','Yakisoba (mie goreng Jepang)'],
+  ['焼き鳥','yakitori','Sate ayam Jepang'],
+  ['野菜','yasai','Sayur'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const BUAHSAYUR = [
+  ['アボカド','abokado','Alpukat'],
+  ['アスパラガス','asuparagasu','Asparagus'],
+  ['バナナ','banana','Pisang'],
+  ['ぶどう','budou','Anggur'],
+  ['ブロッコリー','burokkorii','Brokoli'],
+  ['大根','daikon','Lobak putih'],
+  ['ほうれん草','hourensou','Bayam'],
+  ['いちご','ichigo','Stroberi'],
+  ['じゃがいも','jagaimo','Kentang'],
+  ['かぼちゃ','kabocha','Labu kuning'],
+  ['柿','kaki','Kesemek'],
+  ['きのこ','kinoko','Jamur'],
+  ['キャベツ','kyabetsu','Kubis'],
+  ['きゅうり','kyuuri','Timun'],
+  ['メロン','meron','Melon'],
+  ['みかん','mikan','Jeruk mandarin'],
+  ['もも','momo','Persik'],
+  ['なし','nashi','Pir'],
+  ['なす','nasu','Terong'],
+  ['ねぎ','negi','Daun bawang'],
+  ['にんじん','ninjin','Wortel'],
+  ['にんにく','ninniku','Bawang putih'],
+  ['オクラ','okura','Okra'],
+  ['パイナップル','painappuru','Nanas'],
+  ['ピーマン','piiman','Paprika hijau'],
+  ['ライム','raimu','Jeruk nipis'],
+  ['レモン','remon','Lemon'],
+  ['れんこん','renkon','Akar teratai'],
+  ['りんご','ringo','Apel'],
+  ['さくらんぼ','sakuranbo','Buah ceri'],
+  ['さつまいも','satsumaimo','Ubi jalar'],
+  ['すいか','suika','Semangka'],
+  ['すもも','sumomo','Plum Jepang'],
+  ['たまねぎ','tamanegi','Bawang bombai'],
+  ['トマト','tomato','Tomat'],
+  ['とうもろこし','toumorokoshi','Jagung'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const TUMBUHAN = [
+  ['アサガオ','asagao','Bunga morning glory'],
+  ['バラ','bara','Mawar'],
+  ['チューリップ','chuurippu','Tulip'],
+  ['枝','eda','Ranting / cabang'],
+  ['葉','ha','Daun'],
+  ['花','hana','Bunga'],
+  ['蓮','hasu','Bunga teratai'],
+  ['ひまわり','himawari','Bunga matahari'],
+  ['稲','ine','Padi'],
+  ['木','ki','Pohon'],
+  ['菊','kiku','Bunga krisan'],
+  ['苔','koke','Lumut'],
+  ['茎','kuki','Batang tumbuhan'],
+  ['草','kusa','Rumput'],
+  ['松','matsu','Pohon pinus'],
+  ['実','mi','Buah (dari tumbuhan)'],
+  ['幹','miki','Batang pohon'],
+  ['紅葉','momiji','Daun / pohon maple Jepang'],
+  ['森','mori','Hutan'],
+  ['根','ne','Akar'],
+  ['サボテン','saboten','Kaktus'],
+  ['桜','sakura','Pohon / bunga sakura'],
+  ['芝生','shibafu','Rumput taman'],
+  ['竹','take','Bambu'],
+  ['種','tane','Biji / benih'],
+  ['つぼみ','tsubomi','Kuncup bunga'],
+  ['つた','tsuta','Tanaman rambat'],
+  ['梅','ume','Pohon / bunga ume'],
+  ['柳','yanagi','Pohon willow'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const HEWAN = [
+  ['アヒル','ahiru','Bebek'],
+  ['アリ','ari','Semut'],
+  ['豚','buta','Babi'],
+  ['蝶','chou','Kupu-kupu'],
+  ['エビ','ebi','Udang'],
+  ['フクロウ','fukurou','Burung hantu'],
+  ['蜂','hachi','Lebah'],
+  ['蛇','hebi','Ular'],
+  ['羊','hitsuji','Domba'],
+  ['犬','inu','Anjing'],
+  ['イルカ','iruka','Lumba-lumba'],
+  ['カバ','kaba','Kuda nil'],
+  ['カエル','kaeru','Katak'],
+  ['亀','kame','Kura-kura'],
+  ['カンガルー','kangaruu','Kanguru'],
+  ['カニ','kani','Kepiting'],
+  ['キリン','kirin','Jerapah'],
+  ['キツネ','kitsune','Rubah'],
+  ['コアラ','koara','Koala'],
+  ['クジラ','kujira','Paus'],
+  ['熊','kuma','Beruang'],
+  ['クモ','kumo','Laba-laba'],
+  ['猫','neko','Kucing'],
+  ['ねずみ','nezumi','Tikus'],
+  ['鶏','niwatori','Ayam'],
+  ['オオカミ','ookami','Serigala'],
+  ['パンダ','panda','Panda'],
+  ['ペンギン','pengin','Penguin'],
+  ['ライオン','raion','Singa'],
+  ['リス','risu','Tupai'],
+  ['魚','sakana','Ikan'],
+  ['サメ','same','Hiu'],
+  ['猿','saru','Monyet'],
+  ['シマウマ','shimauma','Zebra'],
+  ['タコ','tako','Gurita'],
+  ['虎','tora','Harimau'],
+  ['鳥','tori','Burung'],
+  ['馬','uma','Kuda'],
+  ['うさぎ','usagi','Kelinci'],
+  ['牛','ushi','Sapi'],
+  ['ワシ','washi','Elang'],
+  ['象','zou','Gajah'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const RUMAH = [
+  ['ベッド','beddo','Tempat tidur'],
+  ['台所','daidokoro','Dapur'],
+  ['電気','denki','Lampu / listrik'],
+  ['ドア','doa','Pintu'],
+  ['布団','futon','Futon (kasur lipat)'],
+  ['玄関','genkan','Pintu masuk / teras rumah'],
+  ['ゴミ箱','gomibako','Tempat sampah'],
+  ['歯ブラシ','haburashi','Sikat gigi'],
+  ['部屋','heya','Kamar / ruangan'],
+  ['家','ie','Rumah'],
+  ['椅子','isu','Kursi'],
+  ['じゅうたん','juutan','Karpet'],
+  ['カーテン','kaaten','Gorden'],
+  ['かばん','kaban','Tas'],
+  ['壁','kabe','Dinding'],
+  ['鏡','kagami','Cermin'],
+  ['鍵','kagi','Kunci'],
+  ['階段','kaidan','Tangga'],
+  ['傘','kasa','Payung'],
+  ['コンセント','konsento','Stopkontak listrik'],
+  ['窓','mado','Jendela'],
+  ['枕','makura','Bantal'],
+  ['毛布','moufu','Selimut'],
+  ['鍋','nabe','Panci'],
+  ['庭','niwa','Halaman / taman rumah'],
+  ['お風呂','ofuro','Bak mandi / kamar mandi'],
+  ['冷蔵庫','reizouko','Kulkas'],
+  ['財布','saifu','Dompet'],
+  ['石鹸','sekken','Sabun'],
+  ['洗濯機','sentakuki','Mesin cuci'],
+  ['シャンプー','shanpuu','Sampo'],
+  ['ソファ','sofa','Sofa'],
+  ['掃除機','soujiki','Penyedot debu'],
+  ['スイッチ','suicchi','Saklar'],
+  ['棚','tana','Rak'],
+  ['タオル','taoru','Handuk'],
+  ['テーブル','teeburu','Meja'],
+  ['時計','tokei','Jam'],
+  ['屋根','yane','Atap'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const ELEKTRONIK = [
+  ['電池','denchi','Baterai'],
+  ['電卓','dentaku','Kalkulator'],
+  ['鉛筆','enpitsu','Pensil'],
+  ['ファイル','fairu','Map arsip'],
+  ['付箋','fusen','Sticky note'],
+  ['ゲーム機','geemuki','Konsol game'],
+  ['はさみ','hasami','Gunting'],
+  ['ホッチキス','hocchikisu','Stapler'],
+  ['色鉛筆','iroenpitsu','Pensil warna'],
+  ['イヤホン','iyahon','Earphone'],
+  ['辞書','jisho','Kamus'],
+  ['定規','jougi','Penggaris'],
+  ['充電器','juudenki','Charger'],
+  ['カメラ','kamera','Kamera'],
+  ['紙','kami','Kertas'],
+  ['携帯電話','keitai denwa','Ponsel / HP'],
+  ['消しゴム','keshigomu','Penghapus'],
+  ['クリップ','kurippu','Klip kertas'],
+  ['教科書','kyoukasho','Buku pelajaran'],
+  ['マーカー','maakaa','Spidol'],
+  ['マウス','mausu','Mouse (komputer)'],
+  ['ノート','nooto','Buku catatan'],
+  ['のり','nori','Lem'],
+  ['パソコン','pasokon','Komputer / laptop'],
+  ['ペン','pen','Pulpen'],
+  ['プリンター','purintaa','Printer'],
+  ['リモコン','rimokon','Remote control'],
+  ['スマートフォン','sumaatofon','Smartphone'],
+  ['スピーカー','supikaa','Speaker'],
+  ['タブレット','taburetto','Tablet'],
+  ['テレビ','terebi','Televisi'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const PAKAIAN = [
+  ['ベルト','beruto','Ikat pinggang'],
+  ['帽子','boushi','Topi'],
+  ['ブーツ','buutsu','Sepatu bot'],
+  ['服','fuku','Baju / pakaian'],
+  ['イヤリング','iyaringu','Anting'],
+  ['ジャケット','jaketto','Jaket'],
+  ['着物','kimono','Kimono'],
+  ['コート','kooto','Mantel'],
+  ['靴','kutsu','Sepatu'],
+  ['靴下','kutsushita','Kaos kaki'],
+  ['マフラー','mafuraa','Syal'],
+  ['めがね','megane','Kacamata'],
+  ['水着','mizugi','Baju renang'],
+  ['ネックレス','nekkuresu','Kalung'],
+  ['ネクタイ','nekutai','Dasi'],
+  ['パジャマ','pajama','Piyama'],
+  ['サンダル','sandaru','Sandal'],
+  ['セーター','seetaa','Sweter'],
+  ['シャツ','shatsu','Kemeja'],
+  ['スカート','sukaato','Rok'],
+  ['スーツ','suutsu','Setelan jas'],
+  ['手袋','tebukuro','Sarung tangan'],
+  ['Tシャツ','tiishatsu','Kaos'],
+  ['ワンピース','wanpiisu','Dress / gaun'],
+  ['指輪','yubiwa','Cincin'],
+  ['浴衣','yukata','Yukata'],
+  ['ズボン','zubon','Celana panjang'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const CUACA = [
+  ['秋','aki','Musim gugur'],
+  ['雨','ame','Hujan'],
+  ['暖かい','atatakai','Hangat'],
+  ['暑い','atsui','Panas (cuaca)'],
+  ['冬','fuyu','Musim dingin'],
+  ['晴れ','hare','Cerah'],
+  ['春','haru','Musim semi'],
+  ['星','hoshi','Bintang'],
+  ['雷','kaminari','Petir / guntur'],
+  ['風','kaze','Angin'],
+  ['霧','kiri','Kabut'],
+  ['氷','koori','Es'],
+  ['曇り','kumori','Berawan'],
+  ['湖','mizuumi','Danau'],
+  ['波','nami','Ombak'],
+  ['夏','natsu','Musim panas'],
+  ['虹','niji','Pelangi'],
+  ['砂漠','sabaku','Gurun'],
+  ['寒い','samui','Dingin (cuaca)'],
+  ['四季','shiki','Empat musim'],
+  ['島','shima','Pulau'],
+  ['空','sora','Langit'],
+  ['涼しい','suzushii','Sejuk'],
+  ['台風','taifuu','Topan'],
+  ['太陽','taiyou','Matahari'],
+  ['天気','tenki','Cuaca'],
+  ['梅雨','tsuyu','Musim hujan (sekitar Juni)'],
+  ['海','umi','Laut'],
+  ['雪','yuki','Salju'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const TEMPAT = [
+  ['美容院','biyouin','Salon kecantikan'],
+  ['病院','byouin','Rumah sakit'],
+  ['大学','daigaku','Universitas'],
+  ['デパート','depaato','Department store'],
+  ['動物園','doubutsuen','Kebun binatang'],
+  ['映画館','eigakan','Bioskop'],
+  ['駅','eki','Stasiun'],
+  ['銀行','ginkou','Bank'],
+  ['博物館','hakubutsukan','Museum'],
+  ['橋','hashi','Jembatan'],
+  ['広場','hiroba','Alun-alun / lapangan terbuka'],
+  ['本屋','hon\'ya','Toko buku'],
+  ['ホテル','hoteru','Hotel'],
+  ['ジム','jimu','Pusat kebugaran'],
+  ['神社','jinja','Kuil Shinto'],
+  ['コンビニ','konbini','Minimarket'],
+  ['交番','kouban','Pos polisi'],
+  ['公園','kouen','Taman'],
+  ['公衆トイレ','koushuu toire','Toilet umum'],
+  ['空港','kuukou','Bandara'],
+  ['教会','kyoukai','Gereja'],
+  ['港','minato','Pelabuhan'],
+  ['温泉','onsen','Onsen / pemandian air panas'],
+  ['お寺','otera','Kuil Buddha'],
+  ['レストラン','resutoran','Restoran'],
+  ['城','shiro','Kastil / istana'],
+  ['市役所','shiyakusho','Balai kota'],
+  ['スーパー','suupaa','Supermarket'],
+  ['図書館','toshokan','Perpustakaan'],
+  ['薬局','yakkyoku','Apotek'],
+  ['郵便局','yuubinkyoku','Kantor pos'],
+  ['遊園地','yuuenchi','Taman bermain'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const PEKERJAAN = [
+  ['弁護士','bengoshi','Pengacara'],
+  ['美容師','biyoushi','Penata rambut'],
+  ['大工','daiku','Tukang kayu'],
+  ['デザイナー','dezainaa','Desainer'],
+  ['エンジニア','enjinia','Insinyur'],
+  ['画家','gaka','Pelukis'],
+  ['銀行員','ginkouin','Pegawai bank'],
+  ['俳優','haiyuu','Aktor'],
+  ['医者','isha','Dokter'],
+  ['獣医','juui','Dokter hewan'],
+  ['会社員','kaishain','Karyawan kantor'],
+  ['看護師','kangoshi','Perawat'],
+  ['歌手','kashu','Penyanyi'],
+  ['警察官','keisatsukan','Polisi'],
+  ['記者','kisha','Wartawan'],
+  ['公務員','koumuin','Pegawai negeri'],
+  ['農家','nouka','Petani'],
+  ['パイロット','pairotto','Pilot'],
+  ['プログラマー','puroguramaa','Programmer'],
+  ['料理人','ryourinin','Koki'],
+  ['漁師','ryoushi','Nelayan'],
+  ['先生','sensei','Guru'],
+  ['社長','shachou','Direktur perusahaan'],
+  ['写真家','shashinka','Fotografer'],
+  ['消防士','shouboushi','Pemadam kebakaran'],
+  ['主婦','shufu','Ibu rumah tangga'],
+  ['店員','ten\'in','Pegawai toko'],
+  ['運転手','untenshu','Sopir'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const PERASAAN = [
+  ['安心','anshin','Lega / tenang'],
+  ['不満','fuman','Tidak puas'],
+  ['恥ずかしい','hazukashii','Malu'],
+  ['イライラ','iraira','Kesal / jengkel'],
+  ['自信','jishin','Percaya diri'],
+  ['かっこいい','kakkoii','Keren'],
+  ['悲しい','kanashii','Sedih'],
+  ['感動','kandou','Terharu / tersentuh'],
+  ['緊張','kinchou','Gugup / tegang'],
+  ['興奮','koufun','Bersemangat / excited'],
+  ['怖い','kowai','Takut'],
+  ['まじめ','majime','Serius / rajin'],
+  ['満足','manzoku','Puas'],
+  ['落ち込む','ochikomu','Sedih / down'],
+  ['驚いた','odoroita','Terkejut'],
+  ['怒っている','okotteiru','Marah'],
+  ['面白い','omoshiroi','Menarik / lucu'],
+  ['寂しい','sabishii','Kesepian'],
+  ['幸せ','shiawase','Bahagia'],
+  ['心配','shinpai','Khawatir'],
+  ['親切','shinsetsu','Ramah'],
+  ['静か','shizuka','Tenang / sepi'],
+  ['退屈','taikutsu','Bosan'],
+  ['つまらない','tsumaranai','Membosankan'],
+  ['嬉しい','ureshii','Senang'],
+  ['うるさい','urusai','Berisik'],
+  ['優しい','yasashii','Baik hati / lembut'],
+  ['勇気','yuuki','Keberanian'],
+  ['残念','zannen','Sayang sekali / disayangkan'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const KENDARAAN = [
+  ['バイク','baiku','Motor'],
+  ['バス','basu','Bus'],
+  ['ボート','booto','Perahu kecil'],
+  ['地下鉄','chikatetsu','Kereta bawah tanah'],
+  ['駐車場','chuushajou','Tempat parkir'],
+  ['電車','densha','Kereta listrik'],
+  ['フェリー','ferii','Kapal feri'],
+  ['船','fune','Kapal'],
+  ['ヘリコプター','herikoputaa','Helikopter'],
+  ['飛行機','hikouki','Pesawat terbang'],
+  ['自転車','jitensha','Sepeda'],
+  ['気球','kikyuu','Balon udara'],
+  ['車','kuruma','Mobil'],
+  ['救急車','kyuukyuusha','Mobil ambulans'],
+  ['モノレール','monoreeru','Monorel'],
+  ['パトカー','patokaa','Mobil polisi'],
+  ['ロケット','roketto','Roket'],
+  ['新幹線','shinkansen','Kereta cepat Shinkansen'],
+  ['消防車','shoubousha','Mobil pemadam kebakaran'],
+  ['スクーター','sukuutaa','Skuter'],
+  ['タクシー','takushii','Taksi'],
+  ['トラック','torakku','Truk'],
+  ['トラム','toramu','Trem'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const DAPUR = [
+  ['泡立て器','awadateki','Pengocok telur (whisk)'],
+  ['弁当箱','bentoubako','Kotak bekal'],
+  ['ボウル','bouru','Mangkuk besar'],
+  ['茶碗','chawan','Mangkuk nasi'],
+  ['電子レンジ','denshi renji','Microwave'],
+  ['フォーク','fooku','Garpu'],
+  ['フライパン','furaipan','Wajan'],
+  ['箸','hashi','Sumpit'],
+  ['包丁','houchou','Pisau dapur'],
+  ['計量カップ','keiryou kappu','Gelas takar'],
+  ['コンロ','konro','Kompor'],
+  ['コップ','koppu','Gelas'],
+  ['急須','kyuusu','Teko teh Jepang'],
+  ['まな板','manaita','Talenan'],
+  ['ナイフ','naifu','Pisau makan'],
+  ['オーブン','oobun','Oven'],
+  ['おろし金','oroshigane','Parutan'],
+  ['お玉','otama','Sendok sayur'],
+  ['ピーラー','piiraa','Pengupas sayur/buah'],
+  ['皿','sara','Piring'],
+  ['炊飯器','suihanki','Rice cooker'],
+  ['スプーン','supuun','Sendok'],
+  ['トング','tongu','Penjepit makanan'],
+  ['トレイ','torei','Nampan'],
+  ['やかん','yakan','Ketel'],
+  ['湯呑み','yunomi','Cangkir teh Jepang'],
+  ['ざる','zaru','Saringan / tampah'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const MUSIK = [
+  ['アコーディオン','akoodion','Akordeon'],
+  ['バイオリン','baiorin','Biola'],
+  ['チェロ','chero','Selo (cello)'],
+  ['ドラム','doramu','Drum'],
+  ['フルート','furuuto','Seruling'],
+  ['ギター','gitaa','Gitar'],
+  ['ハーモニカ','haamonika','Harmonika'],
+  ['カスタネット','kasutanetto','Kastanyet'],
+  ['琴','koto','Koto (alat petik tradisional)'],
+  ['マイク','maiku','Mikrofon'],
+  ['木琴','mokkin','Silofon'],
+  ['オルガン','orugan','Organ'],
+  ['ピアノ','piano','Piano'],
+  ['リコーダー','rikoodaa','Rekorder'],
+  ['サックス','sakkusu','Saksofon'],
+  ['尺八','shakuhachi','Shakuhachi (seruling bambu tradisional)'],
+  ['三味線','shamisen','Shamisen (alat petik tradisional)'],
+  ['シンバル','shinbaru','Simbal'],
+  ['太鼓','taiko','Drum tradisional Jepang'],
+  ['トランペット','toranpetto','Terompet'],
+  ['ウクレレ','ukurere','Ukulele'],
+].map(([jp,romaji,id])=>({jp,romaji,id}));
+
+const POOLS = {
+  hiragana:HIRAGANA, katakana:KATAKANA, kanji:KANJI, kosakata:KOSAKATA,
+  salam:SALAM, percakapan:PERCAKAPAN, restoran:RESTORAN, belanja:BELANJA,
+  arah:ARAH, perjalanan:PERJALANAN, darurat:DARURAT, telepon:TELEPON,
+  angka:ANGKA, waktu:WAKTU, keluarga:KELUARGA, tubuh:TUBUH, warna:WARNA,
+  makanan:MAKANAN, buahsayur:BUAHSAYUR, tumbuhan:TUMBUHAN, hewan:HEWAN,
+  rumah:RUMAH, elektronik:ELEKTRONIK, pakaian:PAKAIAN, cuaca:CUACA,
+  tempat:TEMPAT, pekerjaan:PEKERJAAN, perasaan:PERASAAN,
+  kendaraan:KENDARAAN, dapur:DAPUR, musik:MUSIK,
+};
+
+const META = {
+  hiragana:{title:'Hiragana', jpSub:'ひらがな', icon:'あ', desc:'46 huruf dasar untuk menulis kata-kata asli Jepang.', kind:'kana'},
+  katakana:{title:'Katakana', jpSub:'カタカナ', icon:'カ', desc:'46 huruf untuk menulis kata serapan dari bahasa asing.', kind:'kana'},
+  kanji:{title:'Kanji Dasar', jpSub:'漢字', icon:'字', desc:'80 kanji penting: angka, arah, waktu, tubuh, cuaca, kata kerja dasar, dan kata benda umum.', kind:'kanji'},
+  kosakata:{title:'Kosakata Dasar', jpSub:'言葉', icon:'話', desc:'Kata pondasi yang dipakai di semua kalimat: kata ganti, kata tanya, kata kerja, dan kata benda dasar.', kind:'word'},
+
+  salam:{title:'Salam & Perkenalan', jpSub:'挨拶', icon:'礼', desc:'Sapaan, perkenalan, dan ucapan yang dipakai setiap hari.', kind:'phrase'},
+  percakapan:{title:'Percakapan Umum', jpSub:'会話', icon:'会', desc:'Kalimat serbaguna untuk mengobrol dan menanggapi situasi apa pun.', kind:'phrase'},
+  restoran:{title:'Di Restoran & Kafe', jpSub:'レストラン', icon:'食', desc:'Memesan makanan, bertanya menu, dan membayar di restoran.', kind:'phrase'},
+  belanja:{title:'Berbelanja', jpSub:'買い物', icon:'買', desc:'Menanyakan harga, ukuran, dan bertransaksi saat berbelanja.', kind:'phrase'},
+  arah:{title:'Arah & Transportasi', jpSub:'交通', icon:'交', desc:'Menanyakan arah, naik kereta, bus, dan taksi.', kind:'phrase'},
+  perjalanan:{title:'Bandara & Hotel', jpSub:'旅行', icon:'旅', desc:'Check-in bandara, hotel, dan istilah penting saat bepergian.', kind:'phrase'},
+  darurat:{title:'Kesehatan & Darurat', jpSub:'緊急', icon:'急', desc:'Frasa penting saat sakit, terluka, atau butuh bantuan darurat.', kind:'phrase'},
+  telepon:{title:'Telepon & Janji Temu', jpSub:'電話', icon:'電', desc:'Bertelepon, membuat janji, dan mengatur jadwal bertemu.', kind:'phrase'},
+
+  angka:{title:'Angka', jpSub:'数字', icon:'数', desc:'Angka 0 sampai 1 juta lengkap dengan cara membacanya, termasuk pola baca ratusan/ribuan yang berubah bunyi.', kind:'word'},
+  waktu:{title:'Waktu, Hari & Bulan', jpSub:'時間', icon:'時', desc:'Hari, bulan, dan kata penunjuk waktu sehari-hari.', kind:'word'},
+  keluarga:{title:'Keluarga', jpSub:'家族', icon:'族', desc:'Sebutan untuk anggota keluarga dan panggilan sehari-hari.', kind:'word'},
+  tubuh:{title:'Anggota Tubuh', jpSub:'体', icon:'体', desc:'Nama-nama anggota tubuh dari kepala sampai kaki.', kind:'word'},
+  warna:{title:'Warna', jpSub:'色', icon:'色', desc:'Nama-nama warna, dari dasar sampai warna khas seperti emas dan perak.', kind:'word'},
+  makanan:{title:'Makanan & Minuman', jpSub:'食べ物', icon:'飯', desc:'Nama makanan dan minuman khas Jepang serta sehari-hari.', kind:'word'},
+  buahsayur:{title:'Buah & Sayur', jpSub:'果物と野菜', icon:'菜', desc:'Nama buah dan sayur yang sering ditemui di pasar atau dapur.', kind:'word'},
+  tumbuhan:{title:'Tumbuhan', jpSub:'植物', icon:'植', desc:'Nama pohon, bunga, dan bagian-bagian tumbuhan.', kind:'word'},
+  hewan:{title:'Hewan', jpSub:'動物', icon:'動', desc:'Nama hewan peliharaan, satwa liar, hingga hewan laut.', kind:'word'},
+  rumah:{title:'Benda di Rumah', jpSub:'家の物', icon:'家', desc:'Nama benda dan perabotan yang ada di dalam rumah.', kind:'word'},
+  elektronik:{title:'Elektronik & Alat Tulis', jpSub:'電子機器', icon:'具', desc:'Nama perangkat elektronik dan alat tulis sehari-hari.', kind:'word'},
+  pakaian:{title:'Pakaian', jpSub:'服', icon:'服', desc:'Nama jenis pakaian, aksesori, hingga busana tradisional Jepang.', kind:'word'},
+  cuaca:{title:'Cuaca & Alam', jpSub:'天気', icon:'天', desc:'Kata untuk cuaca, musim, dan unsur alam.', kind:'word'},
+  tempat:{title:'Tempat & Bangunan', jpSub:'場所', icon:'所', desc:'Nama tempat dan bangunan umum di sekitar kita.', kind:'word'},
+  pekerjaan:{title:'Pekerjaan', jpSub:'職業', icon:'職', desc:'Sebutan untuk berbagai profesi dan pekerjaan.', kind:'word'},
+  perasaan:{title:'Perasaan & Sifat', jpSub:'気持ち', icon:'心', desc:'Kata untuk mengungkapkan perasaan dan sifat seseorang.', kind:'word'},
+  kendaraan:{title:'Kendaraan', jpSub:'乗り物', icon:'車', desc:'Nama mobil, kereta, pesawat, dan alat transportasi lainnya.', kind:'word'},
+  dapur:{title:'Alat Dapur & Makan', jpSub:'台所用品', icon:'器', desc:'Nama piring, sendok, panci, dan peralatan dapur sehari-hari.', kind:'word'},
+  musik:{title:'Alat Musik', jpSub:'楽器', icon:'楽', desc:'Nama alat musik modern dan alat musik tradisional Jepang.', kind:'word'},
+};
+
+const ALL_CATS = Object.keys(META);
+const TOTAL_ITEMS = ALL_CATS.reduce((sum,c)=>sum+POOLS[c].length,0);
+// Satu soal untuk SETIAP mnb-materi, supaya kuis campuran benar-benar mencakup semua menu
+// (lihat buildCategorySequence) alih-alih hasil random murni yang bisa melewatkan sebagian.
+const MIXED_QUIZ_LENGTH = ALL_CATS.length;
+
+const HOME_SECTIONS = [
+  {id:'sec-dasar', title:'Dasar', jpSub:'基礎', desc:'Fondasi menulis dan kosakata inti sebelum masuk ke mnb-materi lain.', cats:['hiragana','katakana','kanji','kosakata']},
+  {id:'sec-percakapan', title:'Percakapan Sehari-hari', jpSub:'日常会話', desc:'Kalimat siap pakai untuk sapaan, restoran, belanja, transportasi, hingga keadaan darurat.', cats:['salam','percakapan','restoran','belanja','arah','perjalanan','darurat','telepon']},
+  {id:'sec-tematik', title:'Kosakata Tematik', jpSub:'テーマ別単語', desc:'Nama benda, tumbuhan, hewan, dan topik sehari-hari lainnya, dikelompokkan per tema.', cats:['angka','waktu','keluarga','tubuh','warna','makanan','buahsayur','tumbuhan','hewan','rumah','elektronik','pakaian','cuaca','tempat','pekerjaan','perasaan','kendaraan','dapur','musik']},
+];
+
+/* ---------- STATE ---------- */
+const state = {
+  view:'home',
+  category:null,
+  mode:'belajar',
+  study:{order:[], index:0, flipped:false, view:'card', search:''},
+  quiz:{started:false, finished:false, questions:[], index:0, score:0, selected:null, answered:false, records:[]},
+};
+const sessionStats = {correct:0, total:0};
+
+/* ---------- UTIL ---------- */
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+function sample(arr,n){ return shuffle(arr).slice(0,n); }
+function speak(text){
+  try{
+    if(!('speechSynthesis' in window) || !text) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ja-JP';
+    u.rate = 0.85;
+    window.speechSynthesis.speak(u);
+  }catch(e){ /* speech not available, ignore */ }
+}
+function jpSizeClass(text){
+  const len = (text||'').length;
+  if(len <= 2) return 'size-xl';
+  if(len <= 5) return 'size-lg';
+  if(len <= 9) return 'size-md';
+  return 'size-sm';
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+/* ---------- NAVIGATION ---------- */
+function goHome(){
+  state.view = 'home';
+  render();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function openCategory(cat){
+  state.view = 'mnb-workspace';
+  state.category = cat;
+  if(cat === 'campuran'){
+    state.mode = 'kuis';
+    resetQuizState();
+  } else {
+    state.mode = 'belajar';
+    setupStudy(cat);
+  }
+  render();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function switchTab(mode){
+  state.mode = mode;
+  if(mode === 'belajar') setupStudy(state.category);
+  else resetQuizState();
+  render();
+}
+
+/* ---------- STUDY MODE ---------- */
+function setupStudy(cat){
+  const pool = POOLS[cat];
+  // Urutan asli (sesuai urutan yang sudah disusun rapi di data), TIDAK diacak.
+  state.study = {order: pool.map((_,i)=>i), index:0, flipped:false, view:'card', search:''};
+}
+function flipCard(){ state.study.flipped = !state.study.flipped; render(); }
+function nextCard(){
+  state.study.index = (state.study.index+1) % state.study.order.length;
+  state.study.flipped = false;
+  render();
+}
+function prevCard(){
+  state.study.index = (state.study.index-1+state.study.order.length) % state.study.order.length;
+  state.study.flipped = false;
+  render();
+}
+function shuffleStudy(){
+  // Tombol 🔀 ini satu-satunya cara mengacak kartu, dipicu manual oleh pengguna.
+  const pool = POOLS[state.category];
+  state.study = {order: shuffle(pool.map((_,i)=>i)), index:0, flipped:false, view:'card', search:''};
+  render();
+}
+function setStudyView(v){
+  state.study.view = v;
+  render();
+}
+function jumpToCard(poolIdx){
+  // Dipanggil dari tampilan Daftar: lompat ke kartu tsb di tampilan Kartu.
+  const pos = state.study.order.indexOf(poolIdx);
+  state.study.index = pos >= 0 ? pos : 0;
+  state.study.flipped = false;
+  state.study.view = 'card';
+  render();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+function filterStudyItems(pool, query){
+  const q = (query||'').trim().toLowerCase();
+  const withIdx = pool.map((item,i)=>({jp:item.jp, romaji:item.romaji, id:item.id, i}));
+  if(!q) return withIdx;
+  return withIdx.filter(item =>
+    (item.jp||'').toLowerCase().includes(q) ||
+    (item.romaji||'').toLowerCase().includes(q) ||
+    (item.id||'').toLowerCase().includes(q)
+  );
+}
+function renderListRow(item){
+  return `
+  <div class="mnb-list-row" role="button" tabindex="0" onclick="jumpToCard(${item.i})" onkeydown="if(event.key==='Enter')jumpToCard(${item.i})">
+    <div class="mnb-list-row-top">
+      <div class="mnb-list-row-jp">${item.jp}</div>
+      <button class="mnb-list-row-speak" onclick="event.stopPropagation();speak('${item.jp}')" aria-label="Dengarkan ${item.romaji}">🔊</button>
+    </div>
+    <div class="mnb-list-row-romaji">${item.romaji}</div>
+    ${item.id ? `<div class="mnb-list-row-meaning">${item.id}</div>` : ''}
+  </div>`;
+}
+function updateStudyListResults(){
+  // Update ringan: hanya mengganti hasil + hitungan, TIDAK render ulang seluruh app,
+  // supaya fokus/kursor di kotak pencarian tidak hilang setiap kali mengetik.
+  const pool = POOLS[state.category];
+  const items = filterStudyItems(pool, state.study.search);
+  const container = document.getElementById('mnb-list-view-results');
+  const countEl = document.getElementById('mnb-list-count');
+  if(container){
+    container.innerHTML = items.length ? items.map(renderListRow).join('') : '<p class="mnb-list-empty">Tidak ditemukan. Coba kata kunci lain.</p>';
+  }
+  if(countEl){
+    countEl.textContent = state.study.search ? `${items.length} dari ${pool.length} kata cocok` : `${pool.length} kata`;
+  }
+}
+function setStudySearch(v){
+  state.study.search = v;
+  updateStudyListResults();
+}
+
+/* ---------- QUIZ ---------- */
+function resetQuizState(){
+  state.quiz = {started:false, finished:false, questions:[], index:0, score:0, selected:null, answered:false, records:[]};
+}
+function buildQuestion(cat, usedSet){
+  const pool = POOLS[cat];
+  const kind = META[cat].kind;
+  let avail = pool.map((_,i)=>i).filter(i=>!usedSet.has(i));
+  if(avail.length === 0){ usedSet.clear(); avail = pool.map((_,i)=>i); }
+  const correctIndex = avail[Math.floor(Math.random()*avail.length)];
+  usedSet.add(correctIndex);
+  const correctItem = pool[correctIndex];
+  const otherIdx = pool.map((_,i)=>i).filter(i=>i!==correctIndex);
+  const distractIdx = sample(otherIdx,3);
+
+  let label, promptJp=null, promptText=null, showHint=false, optionField, optionStyle;
+
+  if(kind==='kana'){
+    if(Math.random() < 0.5){
+      label='Apa bacaan huruf ini?'; promptJp=correctItem.jp; optionField='romaji'; optionStyle='text';
+    } else {
+      label='Pilih huruf yang tepat untuk bacaan ini:'; promptText=correctItem.romaji; optionField='jp'; optionStyle='char';
+    }
+  } else if(kind==='kanji'){
+    if(Math.random() < 0.5){
+      label='Apa arti kanji ini?'; promptJp=correctItem.jp; showHint=true; optionField='id'; optionStyle='text';
+    } else {
+      label='Pilih kanji yang tepat untuk arti ini:'; promptText=correctItem.id; optionField='jp'; optionStyle='char';
+    }
+  } else if(kind==='phrase'){
+    if(Math.random() < 0.5){
+      label='Apa artinya kalimat ini?'; promptJp=correctItem.jp; showHint=true; optionField='id'; optionStyle='text';
+    } else {
+      label='Pilih kalimat bahasa Jepang yang tepat:'; promptText=correctItem.id; optionField='jp'; optionStyle='phrase';
+    }
+  } else {
+    if(Math.random() < 0.5){
+      label='Apa artinya?'; promptJp=correctItem.jp; showHint=true; optionField='id'; optionStyle='text';
+    } else {
+      label='Pilih kata bahasa Jepang yang tepat:'; promptText=correctItem.id; optionField='jp'; optionStyle='word';
+    }
+  }
+
+  const correctText = correctItem[optionField];
+  const distractTexts = distractIdx.map(i => pool[i][optionField]);
+  const options = shuffle([
+    {text: correctText, correct: true},
+    ...distractTexts.map(t => ({text: t, correct: false}))
+  ]);
+
+  return {
+    category: cat, label, promptJp, promptText,
+    promptSize: promptJp ? jpSizeClass(promptJp) : null,
+    promptHint: showHint ? correctItem.romaji : null,
+    options, optionStyle,
+    itemJp: correctItem.jp,
+    correctText,
+  };
+}
+function buildCategorySequence(length){
+  // Mengisi soal dengan mengacak SATU PUTARAN PENUH semua kategori dulu (tanpa pengulangan),
+  // baru mengacak ulang untuk putaran berikutnya jika masih kurang. Dengan begini kuis
+  // campuran selalu mencakup semua menu/mnb-materi, bukan hasil random murni yang bisa
+  // melewatkan sebagian kategori begitu saja.
+  let seq = [];
+  while(seq.length < length){
+    seq = seq.concat(shuffle(ALL_CATS));
+  }
+  return seq.slice(0, length);
+}
+function startQuiz(cat){
+  const length = cat === 'campuran' ? MIXED_QUIZ_LENGTH : 10;
+  const questions = [];
+  if(cat === 'campuran'){
+    const usedSets = {};
+    ALL_CATS.forEach(c=>{ usedSets[c] = new Set(); });
+    const catSequence = buildCategorySequence(length);
+    catSequence.forEach(c=>{
+      questions.push(buildQuestion(c, usedSets[c]));
+    });
+  } else {
+    const used = new Set();
+    for(let i=0;i<length;i++) questions.push(buildQuestion(cat, used));
+  }
+  state.quiz = {started:true, finished:false, questions, index:0, score:0, selected:null, answered:false, records:[]};
+  render();
+}
+function selectAnswer(optIndex){
+  const quiz = state.quiz;
+  if(quiz.answered) return;
+  const q = quiz.questions[quiz.index];
+  const opt = q.options[optIndex];
+  quiz.answered = true;
+  quiz.selected = optIndex;
+  sessionStats.total++;
+  if(opt.correct){ quiz.score++; sessionStats.correct++; }
+  quiz.records.push({
+    category: q.category,
+    promptDisplay: q.promptJp || q.promptText,
+    yourAnswer: opt.text,
+    correctAnswer: q.correctText,
+    correct: opt.correct,
+  });
+  render();
+}
+function nextQuestion(){
+  const quiz = state.quiz;
+  if(quiz.index+1 >= quiz.questions.length){
+    quiz.finished = true;
+  } else {
+    quiz.index++;
+    quiz.answered = false;
+    quiz.selected = null;
+  }
+  render();
+}
+function retryQuiz(){ startQuiz(state.category); }
+
+/* ---------- RENDER ---------- */
+function render(){
+  const app = document.getElementById('mnb-app');
+  app.innerHTML = renderHeader() + (state.view === 'home' ? renderHome() : renderWorkspace()) + renderFooter();
+}
+
+function renderHeader(){
+  const statHtml = sessionStats.total > 0
+    ? `<span class="mnb-stat-pill">🎯 ${sessionStats.correct}/${sessionStats.total} benar sesi ini</span>`
+    : '';
+  return `
+  <header class="mnb-site-header">
+    <button class="mnb-brand" onclick="goHome()"><span class="mark">学</span> Manabou</button>
+    <div class="mnb-header-actions">
+      ${statHtml}
+      <button class="mnb-nav-btn" onclick="openCategory('campuran')">Kuis Campuran</button>
+    </div>
+  </header>`;
+}
+
+function renderHome(){
+  const navPills = HOME_SECTIONS.map(s=>`<a href="#${s.id}">${s.title}</a>`).join('');
+  const sectionsHtml = HOME_SECTIONS.map(renderHomeSection).join('');
+  return `
+  <section class="mnb-hero">
+    <div class="mnb-hero-kanji-bg">学</div>
+    <div class="mnb-hero-content">
+      <div class="mnb-eyebrow">日本語を学ぼう</div>
+      <h1>Belajar Bahasa Jepang, Selangkah Demi Selangkah</h1>
+      <p>Kuasai Hiragana, Katakana, dan kanji dasar, lalu perkuat dengan ${TOTAL_ITEMS}+ kosakata dan kalimat lewat ${ALL_CATS.length} mnb-materi — mulai dari sapaan, restoran, arah jalan, sampai nama benda, tumbuhan, dan hewan. Setiap mnb-materi punya kartu belajar dan kuis interaktif dengan stempel ala hanko Jepang.</p>
+      <button class="mnb-cta" onclick="document.getElementById('mnb-materi').scrollIntoView({behavior:'smooth'})">Mulai Belajar</button>
+      <div class="mnb-quicknav">${navPills}</div>
+    </div>
+  </section>
+  <div id="mnb-materi">
+    ${sectionsHtml}
+    <section class="mnb-materi-section" id="mnb-sec-campuran">
+      <div class="mnb-materi-section-head"><h2>Uji Semua Kemampuan</h2><span class="jp-sub">総合クイズ</span></div>
+      <p class="mnb-materi-section-desc">Satu kuis komprehensif berisi ${MIXED_QUIZ_LENGTH} soal — satu soal dari <strong>setiap</strong> mnb-materi di atas, jadi tidak ada yang terlewat. Selesai kuis, kamu langsung lihat skor dan kesalahan dikelompokkan per mnb-materi.</p>
+      <div class="mnb-cat-grid" style="max-width:360px;">
+        <button class="mnb-cat-card mix" onclick="openCategory('campuran')">
+          <div class="mnb-cat-icon">道</div>
+          <h3>Kuis Campuran</h3>
+          <span class="jp-sub">混ぜクイズ</span>
+          <p>Satu soal dari tiap mnb-materi (${MIXED_QUIZ_LENGTH} soal) — menguji semuanya, bukan cuma sebagian.</p>
+          <div class="mnb-cat-count">Mulai kuis →</div>
+        </button>
+      </div>
+    </section>
+  </div>`;
+}
+function renderHomeSection(section){
+  return `
+  <section class="mnb-materi-section" id="${section.id}">
+    <div class="mnb-materi-section-head"><h2>${section.title}</h2><span class="jp-sub">${section.jpSub}</span></div>
+    <p class="mnb-materi-section-desc">${section.desc}</p>
+    <div class="mnb-cat-grid">${section.cats.map(renderCatCard).join('')}</div>
+  </section>`;
+}
+function renderCatCard(cat){
+  const m = META[cat];
+  return `<button class="mnb-cat-card" onclick="openCategory('${cat}')">
+    <div class="mnb-cat-icon">${m.icon}</div>
+    <h3>${m.title}</h3>
+    <span class="jp-sub">${m.jpSub}</span>
+    <p>${m.desc}</p>
+    <div class="mnb-cat-count">${POOLS[cat].length} item</div>
+  </button>`;
+}
+
+function renderWorkspace(){
+  if(state.category === 'campuran') return renderWorkspaceCampuran();
+  const m = META[state.category];
+  return `
+  <div class="mnb-workspace">
+    <div class="mnb-workspace-bg-icon">${m.icon}</div>
+    <div class="mnb-workspace-content">
+      <button class="mnb-back-btn" onclick="goHome()">← Kembali ke Beranda</button>
+      <div class="mnb-ws-title"><h2>${m.title}</h2><span class="jp-sub">${m.jpSub}</span></div>
+      <p class="mnb-ws-desc">${m.desc}</p>
+      <div class="mnb-tabs">
+        <button class="mnb-tab ${state.mode==='belajar'?'active':''}" onclick="switchTab('belajar')">📖 Belajar</button>
+        <button class="mnb-tab ${state.mode==='kuis'?'active':''}" onclick="switchTab('kuis')">✏️ Kuis</button>
+      </div>
+      ${state.mode==='belajar' ? renderStudy() : renderQuizArea()}
+    </div>
+  </div>`;
+}
+function renderWorkspaceCampuran(){
+  return `
+  <div class="mnb-workspace">
+    <div class="mnb-workspace-bg-icon">道</div>
+    <div class="mnb-workspace-content">
+      <button class="mnb-back-btn" onclick="goHome()">← Kembali ke Beranda</button>
+      <div class="mnb-ws-title"><h2>Kuis Campuran</h2><span class="jp-sub">混ぜクイズ</span></div>
+      <p class="mnb-ws-desc">${MIXED_QUIZ_LENGTH} soal — satu soal dari <strong>setiap</strong> mnb-materi (${ALL_CATS.length} mnb-materi total: huruf, kanji, percakapan sehari-hari, dan kosakata tematik), urutannya diacak setiap kali main supaya tidak ada menu yang terlewat.</p>
+      ${renderQuizArea()}
+    </div>
+  </div>`;
+}
+
+function renderStudy(){
+  const view = state.study.view || 'card';
+  return `
+  <div class="mnb-study-toolbar">
+    <div class="mnb-view-toggle">
+      <button class="mnb-vtab ${view==='card'?'active':''}" onclick="setStudyView('card')">🗂️ Kartu</button>
+      <button class="mnb-vtab ${view==='list'?'active':''}" onclick="setStudyView('list')">📋 Daftar Semua</button>
+    </div>
+  </div>
+  ${view==='list' ? renderStudyList() : renderStudyCard()}`;
+}
+function renderStudyList(){
+  const pool = POOLS[state.category];
+  const items = filterStudyItems(pool, state.study.search);
+  return `
+  <div class="mnb-study-list-wrap">
+    <input class="mnb-list-search" type="text" placeholder="🔍 Cari kata, romaji, atau arti..." value="${escapeHtml(state.study.search||'')}" oninput="setStudySearch(this.value)">
+    <div class="mnb-list-count" id="mnb-list-count">${state.study.search ? `${items.length} dari ${pool.length} kata cocok` : `${pool.length} kata`}</div>
+    <div class="mnb-list-view" id="mnb-list-view-results">${items.length ? items.map(renderListRow).join('') : '<p class="mnb-list-empty">Tidak ditemukan. Coba kata kunci lain.</p>'}</div>
+  </div>`;
+}
+function renderStudyCard(){
+  const pool = POOLS[state.category];
+  const idx = state.study.order[state.study.index];
+  const item = pool[idx];
+  const flippedClass = state.study.flipped ? 'flipped' : '';
+  const sizeClass = jpSizeClass(item.jp);
+  const pct = Math.round(((state.study.index+1)/pool.length)*100);
+  return `
+  <div class="mnb-study-wrap">
+    <div class="mnb-progress-bar"><div class="mnb-progress-fill" style="width:${pct}%"></div></div>
+    <div class="mnb-study-progress">Kartu ${state.study.index+1} / ${pool.length}</div>
+    <div class="mnb-flashcard ${flippedClass} ${sizeClass}" onclick="flipCard()">
+      <div class="mnb-flashcard-inner">
+        <div class="mnb-flashcard-face mnb-flashcard-front">
+          <div class="big ${sizeClass}">${item.jp}</div>
+          <div class="mnb-flip-hint">Ketuk kartu untuk membalik</div>
+        </div>
+        <div class="mnb-flashcard-face mnb-flashcard-back">
+          <div class="romaji">${item.romaji}</div>
+          ${item.id ? `<div class="meaning">${item.id}</div>` : ''}
+        </div>
+      </div>
+    </div>
+    <button class="mnb-listen-btn" onclick="speak('${item.jp}')">🔊 Dengarkan</button>
+    <div class="mnb-study-controls">
+      <button class="mnb-icon-btn" onclick="prevCard()" aria-label="Kartu sebelumnya">←</button>
+      <button class="mnb-icon-btn" onclick="shuffleStudy()" aria-label="Acak kartu">🔀</button>
+      <button class="mnb-icon-btn" onclick="nextCard()" aria-label="Kartu berikutnya">→</button>
+    </div>
+    <div class="mnb-kbd-hint"><kbd>←</kbd> <kbd>→</kbd> pindah kartu · <kbd>spasi</kbd> membalik</div>
+  </div>`;
+}
+
+function renderQuizArea(){
+  const quiz = state.quiz;
+  if(!quiz.started) return renderQuizIntro();
+  if(quiz.finished) return renderQuizResult();
+  return renderQuizQuestion();
+}
+function renderQuizIntro(){
+  const cat = state.category;
+  const length = cat === 'campuran' ? MIXED_QUIZ_LENGTH : 10;
+  const title = cat === 'campuran' ? 'Kuis Campuran' : META[cat].title;
+  const desc = cat === 'campuran'
+    ? `${length} soal pilihan ganda — satu soal dari setiap mnb-materi (${ALL_CATS.length} mnb-materi total), diacak urutannya. Setelah selesai kamu akan lihat skor dan daftar kesalahan lengkap dengan materinya, supaya tahu persis bagian mana yang perlu diulang.`
+    : `${length} soal pilihan ganda. Setiap jawaban langsung mendapat stempel ○ atau ✗.`;
+  return `
+  <div class="mnb-quiz-intro">
+    <h3 style="font-size:1.25rem;margin-bottom:8px;">Siap menguji dirimu?</h3>
+    <p style="color:var(--ink-soft);">Kuis ${title} — ${desc}</p>
+    <button class="mnb-start-btn" onclick="startQuiz('${cat}')">Mulai Kuis</button>
+  </div>`;
+}
+function renderQuizQuestion(){
+  const quiz = state.quiz;
+  const q = quiz.questions[quiz.index];
+
+  const dots = quiz.questions.map((_,i)=>{
+    let cls = 'mnb-stamp-dot';
+    if(i < quiz.records.length) cls += quiz.records[i].correct ? ' correct' : ' wrong';
+    else if(i === quiz.index) cls += ' current';
+    return `<div class="${cls}"></div>`;
+  }).join('');
+
+  const promptHtml = q.promptJp
+    ? `<div class="mnb-prompt-jp ${q.promptSize}">${q.promptJp}</div>${q.promptHint ? `<div class="mnb-prompt-hint">${q.promptHint}</div>` : ''}`
+    : `<div class="mnb-prompt-text">${q.promptText}</div>`;
+
+  const optionsHtml = q.options.map((opt,i)=>{
+    let cls = 'mnb-opt-btn';
+    if(q.optionStyle === 'char') cls += ' opt-char';
+    else if(q.optionStyle === 'word') cls += ' opt-word';
+    else if(q.optionStyle === 'phrase') cls += ' opt-phrase';
+    let disabled = '';
+    if(quiz.answered){
+      disabled = 'disabled';
+      if(opt.correct) cls += ' is-correct';
+      else if(i === quiz.selected) cls += ' is-wrong';
+    }
+    return `<button class="${cls}" ${disabled} onclick="selectAnswer(${i})">${opt.text}</button>`;
+  }).join('');
+
+  let stampOverlay = '';
+  if(quiz.answered){
+    const rec = quiz.records[quiz.records.length-1];
+    stampOverlay = `<div class="mnb-stamp-overlay">${rec.correct ? '<div class="mnb-stamp-maru"></div>' : '<div class="mnb-stamp-batsu"></div>'}</div>`;
+  }
+
+  return `
+  <div class="mnb-quiz-head"><span>Soal ${quiz.index+1} / ${quiz.questions.length}</span><span>Skor: ${quiz.score} benar</span></div>
+  <div class="mnb-stamp-row">${dots}</div>
+  <div class="mnb-quiz-card">
+    ${stampOverlay}
+    <div class="mnb-quiz-label">${q.label}</div>
+    ${promptHtml}
+    <div style="margin-top:16px;"><button class="mnb-listen-btn" onclick="speak('${q.itemJp}')">🔊 Dengarkan</button></div>
+  </div>
+  <div class="mnb-options-grid">${optionsHtml}</div>
+  ${quiz.answered ? `<div class="mnb-quiz-foot"><button class="mnb-next-btn" onclick="nextQuestion()">${quiz.index+1>=quiz.questions.length?'Lihat Hasil':'Soal Berikutnya'}</button></div>` : ''}
+  `;
+}
+function scoreTier(pct){
+  if(pct >= 90) return {tone:'correct', msg:'Luar biasa! Kamu sudah sangat menguasai mnb-materi ini.'};
+  if(pct >= 70) return {tone:'correct', msg:'Bagus! Sedikit lagi menuju sempurna.'};
+  if(pct >= 50) return {tone:'warn', msg:'Lumayan, terus berlatih ya.'};
+  return {tone:'wrong', msg:'Jangan menyerah, ulangi lagi untuk memperkuat ingatanmu.'};
+}
+function groupRecordsByCategory(records){
+  // Kelompokkan per kategori mengikuti urutan ALL_CATS (Dasar → Percakapan → Tematik)
+  // supaya daftar tinjauan rapi dan konsisten dengan struktur menu di beranda.
+  const map = {};
+  records.forEach(r=>{
+    if(!map[r.category]) map[r.category] = [];
+    map[r.category].push(r);
+  });
+  return ALL_CATS.filter(c=>map[c]).map(c=>({cat:c, meta:META[c], items:map[c]}));
+}
+function renderReviewRow(w){
+  return `
+  <div class="mnb-review-row">
+    <div class="mnb-review-q">${w.promptDisplay}</div>
+    <div class="mnb-review-answers">
+      <span class="mnb-review-your"><span class="mnb-review-label">Jawabanmu</span>${w.yourAnswer}</span>
+      <span class="mnb-review-correct"><span class="mnb-review-label">Jawaban benar</span>${w.correctAnswer}</span>
+    </div>
+  </div>`;
+}
+function renderQuizResult(){
+  const quiz = state.quiz;
+  const total = quiz.questions.length;
+  const pct = Math.round((quiz.score/total)*100);
+  const wrongs = quiz.records.filter(r=>!r.correct);
+  const isMixed = state.category === 'campuran';
+  const tier = scoreTier(pct);
+  const dots = quiz.records.map(r=>`<div class="mnb-stamp-dot ${r.correct?'correct':'wrong'}"></div>`).join('');
+
+  let reviewHtml;
+  if(!wrongs.length){
+    reviewHtml = `<p class="mnb-all-correct">Sempurna, tidak ada kesalahan! 🎉</p>`;
+  } else if(isMixed){
+    const groups = groupRecordsByCategory(wrongs);
+    reviewHtml = `
+    <div class="mnb-review-list">
+      <h3 class="mnb-review-heading">Tinjau Kesalahan (${wrongs.length})</h3>
+      <p class="mnb-review-sub">Dikelompokkan per mnb-materi supaya kelihatan jelas letak salahnya di mana. Ketuk "Pelajari lagi" untuk langsung buka kartu belajar mnb-materi itu.</p>
+      ${groups.map(g => `
+        <div class="mnb-review-group">
+          <div class="mnb-review-group-head">
+            <span class="mnb-cat-tag"><span class="mnb-cat-tag-icon">${g.meta.icon}</span>${g.meta.title} (${g.items.length})</span>
+            <button class="mnb-review-restudy" onclick="openCategory('${g.cat}')">📖 Pelajari lagi</button>
+          </div>
+          ${g.items.map(renderReviewRow).join('')}
+        </div>
+      `).join('')}
+    </div>`;
+  } else {
+    reviewHtml = `
+    <div class="mnb-review-list">
+      <h3 class="mnb-review-heading">Tinjau Kesalahan (${wrongs.length})</h3>
+      <div class="mnb-review-group">
+        <div class="mnb-review-group-head" style="justify-content:flex-end;">
+          <button class="mnb-review-restudy" onclick="switchTab('belajar')">📖 Pelajari lagi</button>
+        </div>
+        ${wrongs.map(renderReviewRow).join('')}
+      </div>
+    </div>`;
+  }
+
+  const mixedCta = !isMixed ? `<button class="mnb-btn-outline" onclick="openCategory('campuran')">🔀 Coba Kuis Campuran</button>` : '';
+
+  return `
+  <div class="mnb-result-wrap">
+    <div class="mnb-quiz-label">Hasil Kuis</div>
+    <div class="mnb-score-ring tone-${tier.tone}" style="--pct:${pct}">
+      <div class="mnb-score-ring-inner">
+        <div class="mnb-score-num">${quiz.score}<span class="mnb-score-den">/${total}</span></div>
+        <div class="mnb-score-pct">${pct}% benar</div>
+      </div>
+    </div>
+    <div class="mnb-result-sub">${tier.msg}</div>
+    <div class="mnb-stamp-row" style="justify-content:center;">${dots}</div>
+    <div class="mnb-result-actions">
+      <button class="mnb-start-btn" onclick="retryQuiz()">Ulangi Kuis</button>
+      <button class="mnb-btn-outline" onclick="goHome()">Kembali ke Beranda</button>
+      ${mixedCta}
+    </div>
+    ${reviewHtml}
+  </div>`;
+}
+
+function renderFooter(){
+  return `<footer class="mnb-site-footer">Dibuat untuk belajar bahasa Jepang — がんばって！(semangat!)</footer>`;
+}
+
+/* ---------- KEYBOARD NAV (mode Kartu di Belajar) ---------- */
+document.addEventListener('keydown', function(e){
+  const tag = document.activeElement ? document.activeElement.tagName : '';
+  if(tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if(state.view !== 'mnb-workspace' || state.mode !== 'belajar') return;
+  if(state.category === 'campuran') return;
+  if((state.study.view||'card') !== 'card') return;
+  if(e.key === 'ArrowRight'){ e.preventDefault(); nextCard(); }
+  else if(e.key === 'ArrowLeft'){ e.preventDefault(); prevCard(); }
+  else if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); flipCard(); }
+});
+
+/* ---------- SWIPE NAV (kartu, mobile) ---------- */
+(function(){
+  let sx=null, sy=null;
+  const appEl = document.getElementById('mnb-app');
+  appEl.addEventListener('touchstart', function(e){
+    if(!e.target.closest('.mnb-flashcard')) return;
+    sx = e.changedTouches[0].clientX;
+    sy = e.changedTouches[0].clientY;
+  }, {passive:true});
+  appEl.addEventListener('touchend', function(e){
+    if(sx===null) return;
+    const card = e.target.closest('.mnb-flashcard');
+    if(!card){ sx=null; sy=null; return; }
+    const dx = e.changedTouches[0].clientX - sx;
+    const dy = e.changedTouches[0].clientY - sy;
+    sx=null; sy=null;
+    if(Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy)*1.5){
+      e.preventDefault();
+      if(dx < 0) nextCard(); else prevCard();
+    }
+  }, {passive:false});
+})();
+
+render();
+
+})();
+</script>
+
 
 <!-- DASHBOARD SECTION -->
 <section class="dashboard-section" id="dashboard-section" style="display:none">
@@ -10435,6 +12536,211 @@ function toolDrop(e, id, handler) {
   if (e.dataTransfer.files[0]) handler(e.dataTransfer.files[0]);
 }
 
+// ═══ QR CODE & QRIS GENERATOR/SCANNER ═══
+// Generate: pakai layanan gambar eksternal (api.qrserver.com), sama kayak
+// fitur "bagikan link via QR" yang udah ada di downloader — ringan, gak
+// perlu library encode tambahan.
+// Scan: pakai jsQR, murni jalan di browser sendiri — gambar yang di-scan
+// TIDAK PERNAH dikirim ke server mana pun buat di-decode.
+// QRIS: format EMV QR Code for Payment Systems (spesifikasi publik EMVCo
+// + Bank Indonesia). Fitur di sini SENGAJA DIBATASI cuma bisa ubah kolom
+// NOMINAL — semua data merchant/penerima (nama, ID akun, dll) disalin
+// apa adanya dari QRIS asli dan TIDAK PERNAH bisa diedit lewat UI ini,
+// biar gak bisa disalahgunakan buat bikin QRIS palsu yang ngalihin
+// pembayaran ke rekening lain.
+
+function qrSwitchMode(mode) {
+  document.getElementById('qr-mode-gen-btn').classList.toggle('active', mode === 'gen');
+  document.getElementById('qr-mode-scan-btn').classList.toggle('active', mode === 'scan');
+  document.getElementById('qr-mode-gen').classList.toggle('active', mode === 'gen');
+  document.getElementById('qr-mode-scan').classList.toggle('active', mode === 'scan');
+}
+
+function qrGenerate() {
+  const text = document.getElementById('qrgen-input').value.trim();
+  if (!text) { toast('Isi link atau teksnya dulu', 'error'); return; }
+  document.getElementById('qrgen-img').src = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(text);
+  document.getElementById('qrgen-result').style.display = 'block';
+}
+
+// Dipakai bareng tombol unduh QR biasa & QRIS hasil generate. Gambarnya
+// dari layanan eksternal, di-fetch dulu jadi blob biar browser BENERAN
+// ngunduh file (bukan cuma buka gambar di tab baru).
+async function qrDownload(imgId, filename) {
+  const img = document.getElementById(imgId);
+  if (!img || !img.src) return;
+  try {
+    const res = await fetch(img.src);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  } catch (e) {
+    toast('Gagal mengunduh, coba screenshot manual ya', 'error');
+  }
+}
+
+function qrScanFile(file) {
+  if (!file || !file.type.startsWith('image/')) { toast('File harus berupa gambar', 'error'); return; }
+  if (typeof jsQR !== 'function') { toast('Pemindai QR belum siap, coba refresh halaman', 'error'); return; }
+
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const result = jsQR(imageData.data, imageData.width, imageData.height);
+
+      const resultWrap = document.getElementById('qrscan-result');
+      const qrisPanel = document.getElementById('qris-panel');
+      document.getElementById('qris-gen-result').style.display = 'none';
+
+      if (!result || !result.data) {
+        resultWrap.style.display = 'block';
+        document.getElementById('qrscan-text').textContent = 'Gak ketemu QR code di gambar ini. Coba gambar lain yang lebih jelas/gak buram.';
+        document.getElementById('qrscan-actions').innerHTML = '';
+        qrisPanel.style.display = 'none';
+        return;
+      }
+
+      const text = result.data;
+      resultWrap.style.display = 'block';
+      document.getElementById('qrscan-text').textContent = text;
+
+      const actions = document.getElementById('qrscan-actions');
+      actions.innerHTML = '';
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn-secondary';
+      copyBtn.style.cssText = 'font-size:11px;padding:7px 12px';
+      copyBtn.textContent = '📋 Salin';
+      copyBtn.onclick = () => { navigator.clipboard.writeText(text).then(() => toast('Disalin!', 'success')).catch(() => toast('Gagal menyalin', 'error')); };
+      actions.appendChild(copyBtn);
+      if (/^https?:\/\//i.test(text)) {
+        const openBtn = document.createElement('button');
+        openBtn.className = 'btn btn-secondary';
+        openBtn.style.cssText = 'font-size:11px;padding:7px 12px';
+        openBtn.textContent = '🔗 Buka Link';
+        openBtn.onclick = () => window.open(text, '_blank');
+        actions.appendChild(openBtn);
+      }
+
+      // Deteksi QRIS: payload EMV QR selalu diawali tag 00 (Payload Format
+      // Indicator) dengan value "01" panjang 2 → string mulai "000201"
+      if (text.startsWith('000201')) {
+        try {
+          const info = qrisParseInfo(text);
+          document.getElementById('qris-merchant-name').textContent = info.merchantName || '(nama tidak terbaca)';
+          document.getElementById('qris-merchant-city').textContent = info.merchantCity || '-';
+          document.getElementById('qris-static-badge').textContent = info.isStatic ? '⚪ Statis (belum ada nominal)' : '🔵 Sudah dinamis (sudah ada nominal)';
+          document.getElementById('qris-amount').value = '';
+          qrisPanel.style.display = 'block';
+          qrisPanel.dataset.payload = text; // simpan payload asli, dipakai pas generate
+        } catch (e) {
+          console.warn('[QRIS] gagal parse, sembunyikan panel QRIS:', e);
+          qrisPanel.style.display = 'none';
+        }
+      } else {
+        qrisPanel.style.display = 'none';
+      }
+    };
+    img.onerror = () => toast('Gagal membaca gambar', 'error');
+    img.src = ev.target.result;
+  };
+  reader.onerror = () => toast('Gagal membaca file', 'error');
+  reader.readAsDataURL(file);
+}
+
+// ── Parsing TLV format EMV QR Code (dipakai QRIS) ──────────────────────
+// Spesifikasi publik: EMVCo QR Code Specification for Payment Systems +
+// spesifikasi teknis QRIS Bank Indonesia. Tiap field: 2 digit tag, 2 digit
+// panjang, lalu value sepanjang itu — diulang sampai akhir string.
+function qrisParseTLV(payload) {
+  const fields = [];
+  let i = 0;
+  while (i + 4 <= payload.length) {
+    const tag = payload.substr(i, 2);
+    const len = parseInt(payload.substr(i + 2, 2), 10);
+    if (!Number.isFinite(len)) break;
+    const value = payload.substr(i + 4, len);
+    fields.push({ tag, value });
+    i += 4 + len;
+  }
+  return fields;
+}
+
+function qrisParseInfo(payload) {
+  const fields = qrisParseTLV(payload);
+  const get = tag => { const f = fields.find(x => x.tag === tag); return f ? f.value : null; };
+  return {
+    isStatic: get('01') !== '12', // "11"=statis, "12"=dinamis; default statis kalau tag 01 gak ada
+    merchantName: get('59'),
+    merchantCity: get('60'),
+    fields
+  };
+}
+
+// CRC-16/CCITT-FALSE — checksum wajib tiap payload EMV QR (poly 0x1021,
+// init 0xFFFF, tanpa XOR akhir). Ini algoritma standar publik, sama
+// persis yang dipakai semua aplikasi pembaca QRIS buat validasi.
+function qrisCrc16(str) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= (str.charCodeAt(i) << 8);
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+// Sisipkan/ganti nominal (tag 54) ke payload QRIS, ubah Point of
+// Initiation Method (tag 01) jadi dinamis, lalu hitung ulang CRC (tag 63).
+// SEMUA field lain — termasuk seluruh identitas merchant/penerima —
+// disalin APA ADANYA dari payload asli, gak pernah diubah di sini.
+function qrisSetAmount(payload, amount) {
+  const fields = qrisParseTLV(payload).filter(f => f.tag !== '54' && f.tag !== '63');
+
+  const poiIdx = fields.findIndex(f => f.tag === '01');
+  if (poiIdx !== -1) {
+    fields[poiIdx] = { tag: '01', value: '12' };
+  } else {
+    const pfiIdx = fields.findIndex(f => f.tag === '00');
+    fields.splice(pfiIdx !== -1 ? pfiIdx + 1 : 0, 0, { tag: '01', value: '12' });
+  }
+
+  const amountStr = String(Math.round(amount));
+  const curIdx = fields.findIndex(f => f.tag === '53');
+  fields.splice(curIdx !== -1 ? curIdx + 1 : fields.length, 0, { tag: '54', value: amountStr });
+
+  let body = fields.map(f => f.tag + String(f.value.length).padStart(2, '0') + f.value).join('');
+  body += '6304'; // placeholder tag+panjang CRC — WAJIB ikut dihitung checksum-nya
+  return body + qrisCrc16(body);
+}
+
+function qrisGenerateWithAmount() {
+  const panel = document.getElementById('qris-panel');
+  const payload = panel.dataset.payload;
+  const amount = parseInt(document.getElementById('qris-amount').value, 10);
+  if (!payload) { toast('Scan QRIS-nya dulu', 'error'); return; }
+  if (!amount || amount <= 0) { toast('Isi nominal yang valid dulu', 'error'); return; }
+
+  try {
+    const newPayload = qrisSetAmount(payload, amount);
+    document.getElementById('qris-gen-img').src = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(newPayload);
+    document.getElementById('qris-gen-result').style.display = 'block';
+    toast('QRIS dengan nominal berhasil dibuat!', 'success');
+  } catch (e) {
+    console.error('[QRIS] gagal generate:', e);
+    toast('Gagal membuat QRIS baru: ' + e.message, 'error');
+  }
+}
+
 // ═══════════════════════════════════════════════════
 // ═══ VIDEO → GIF ═══
 // ═══════════════════════════════════════════════════
@@ -15875,6 +18181,7 @@ const BTN_TOGGLE_DEFS = [
   { key: 'nav_anime', group: '📌 Menu Navigasi Bawah', label: '🎌 Menu Anime', desc: 'Sembunyikan tab Anime dari bottom nav', selector: '.bottom-nav-btn[data-section="anime"]' },
   { key: 'nav_streaming', group: '📌 Menu Navigasi Bawah', label: '🎬 Menu Streaming', desc: 'Sembunyikan tab Streaming dari bottom nav', selector: '.bottom-nav-btn[data-section="streaming"]' },
   { key: 'nav_ninzyai', group: '📌 Menu Navigasi Bawah', label: '💬 Menu Ninzy Ai', desc: 'Sembunyikan tab Ninzy Ai dari bottom nav', selector: '.bottom-nav-btn[data-section="ninzyai"]' },
+  { key: 'nav_manabou', group: '📌 Menu Navigasi Bawah', label: '🇯🇵 Menu Manabou', desc: 'Sembunyikan tab Manabou (belajar bahasa Jepang) dari bottom nav', selector: '.bottom-nav-btn[data-section="manabou"]' },
 
   { key: 'btn_v2g', group: '🔄 Tombol Convert', label: '🎞 Video → GIF', desc: 'Matikan tombol "Buat GIF"', selector: '#v2g-btn' },
   { key: 'btn_g2v', group: '🔄 Tombol Convert', label: '🎥 GIF → Video', desc: 'Matikan tombol "Buat Video"', selector: '#g2v-btn' },
@@ -19996,6 +22303,9 @@ document.addEventListener('keydown',function(e){
   </button>
   <button class="bottom-nav-btn" data-section="ninzyai" onclick="switchMainSection('ninzyai',this)">
     <span class="bn-icon">💬</span><span class="bn-label">Ninzy Ai</span>
+  </button>
+  <button class="bottom-nav-btn" data-section="manabou" onclick="switchMainSection('manabou',this)">
+    <span class="bn-icon">🇯🇵</span><span class="bn-label">Manabou</span>
   </button>
 </nav>
 
