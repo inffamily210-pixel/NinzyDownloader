@@ -2592,7 +2592,7 @@ print(res.json())</pre>
      Konten & logic-nya SEPENUHNYA dibungkus IIFE + di-scope ke #mnb-app,
      jadi gak ada satu pun nama fungsi/variabel/class/selector CSS yang
      bocor ke bagian NinzyCompress lain (sudah dicek manual satu-satu,
-     termasuk tabrakan nama switchTab() & class .tab yang tadinya bentrok
+     termasuk tabrakan nama mnbSwitchTab() & class .tab yang tadinya bentrok
      dengan punya NinzyCompress sendiri). -->
 <div class="main-section" data-section="manabou">
   <div id="mnb-app"></div>
@@ -4064,7 +4064,7 @@ function openCategory(cat){
   render();
   window.scrollTo({top:0, behavior:'smooth'});
 }
-function switchTab(mode){
+function mnbSwitchTab(mode){
   state.mode = mode;
   if(mode === 'belajar') setupStudy(state.category);
   else resetQuizState();
@@ -4346,8 +4346,8 @@ function renderWorkspace(){
       <div class="mnb-ws-title"><h2>${m.title}</h2><span class="jp-sub">${m.jpSub}</span></div>
       <p class="mnb-ws-desc">${m.desc}</p>
       <div class="mnb-tabs">
-        <button class="mnb-tab ${state.mode==='belajar'?'active':''}" onclick="switchTab('belajar')">📖 Belajar</button>
-        <button class="mnb-tab ${state.mode==='kuis'?'active':''}" onclick="switchTab('kuis')">✏️ Kuis</button>
+        <button class="mnb-tab ${state.mode==='belajar'?'active':''}" onclick="mnbSwitchTab('belajar')">📖 Belajar</button>
+        <button class="mnb-tab ${state.mode==='kuis'?'active':''}" onclick="mnbSwitchTab('kuis')">✏️ Kuis</button>
       </div>
       ${state.mode==='belajar' ? renderStudy() : renderQuizArea()}
     </div>
@@ -4548,7 +4548,7 @@ function renderQuizResult(){
       <h3 class="mnb-review-heading">Tinjau Kesalahan (${wrongs.length})</h3>
       <div class="mnb-review-group">
         <div class="mnb-review-group-head" style="justify-content:flex-end;">
-          <button class="mnb-review-restudy" onclick="switchTab('belajar')">📖 Pelajari lagi</button>
+          <button class="mnb-review-restudy" onclick="mnbSwitchTab('belajar')">📖 Pelajari lagi</button>
         </div>
         ${wrongs.map(renderReviewRow).join('')}
       </div>
@@ -4615,6 +4615,29 @@ document.addEventListener('keydown', function(e){
     }
   }, {passive:false});
 })();
+
+
+// Ekspos fungsi yang dipanggil dari onclick/onchange inline di HTML hasil
+// generate Manabou -- WAJIB ke window, karena inline handler HTML selalu
+// resolve nama fungsi di scope GLOBAL, sedangkan semua fungsi di atas ini
+// sekarang privat di dalam IIFE. 'switchTab' SENGAJA diekspos dengan nama
+// beda (mnbSwitchTab) karena NinzyCompress sendiri sudah punya switchTab()
+// global sendiri -- kalau dipakai nama sama, punya NinzyCompress ketimpa.
+window.flipCard = flipCard;
+window.goHome = goHome;
+window.jumpToCard = jumpToCard;
+window.nextCard = nextCard;
+window.nextQuestion = nextQuestion;
+window.openCategory = openCategory;
+window.prevCard = prevCard;
+window.retryQuiz = retryQuiz;
+window.selectAnswer = selectAnswer;
+window.setStudySearch = setStudySearch;
+window.setStudyView = setStudyView;
+window.shuffleStudy = shuffleStudy;
+window.speak = speak;
+window.startQuiz = startQuiz;
+window.mnbSwitchTab = mnbSwitchTab;
 
 render();
 
