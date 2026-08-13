@@ -1848,6 +1848,8 @@ body{padding-bottom:78px}
         <button class="btn btn-secondary dl-mode-btn" data-mode="batch" onclick="dlSwitchMode('batch',this)" style="flex:1;justify-content:center;font-size:11px;padding:7px">📦 Batch (maks 5)</button>
       </div>
 
+      <div id="dl-quota-badge" style="display:none;font-size:11px;color:var(--muted);margin-bottom:8px;text-align:center;padding:5px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px"></div>
+
       <div id="dl-single-mode">
         <div class="field" style="margin-bottom:8px;display:flex;gap:6px">
           <input type="text" id="dl-url" placeholder="Tempel link video di sini..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();dlFetchInfo();}">
@@ -10833,34 +10835,126 @@ function dlRenderPlaylist(data) {
   document.getElementById('dl-playlist-result').style.display = 'block';
 }
 
+// ── Limit harian Downloader (khusus fitur ini, 8x/hari buat user gratis) ──
+// Disimpan di localStorage per akun (sama polanya kayak sistem premium yang
+// udah ada di premiumKey()/getPremiumData()) — bukan di server, jadi cukup
+// buat mencegah pemakaian gak sengaja berlebihan, bukan proteksi anti-abuse
+// yang ketat. User PRO (isPremium()===true) selalu unlimited, gak kena cek
+// ini sama sekali.
+const DL_DAILY_LIMIT = 8;
+const DL_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // rolling 24 jam dari pemakaian pertama, bukan reset jam 00:00 tetap
+
+function dlUsageKey() {
+  const s = getSession();
+  return 'ninzy_dl_usage_' + (s && s.email ? s.email.toLowerCase() : 'guest');
+}
+
+// Baca counter saat ini, otomatis reset ke 0 kalau window 24 jam dari
+// pemakaian pertama udah lewat. Selalu return angka valid, gak pernah null,
+// biar pemanggil gak perlu jaga-jaga null-check tiap saat.
+function dlGetUsage() {
+  let data;
+  try { data = JSON.parse(localStorage.getItem(dlUsageKey()) || 'null'); } catch (e) { data = null; }
+  if (!data || !data.firstUseAt || (Date.now() - data.firstUseAt) >= DL_LIMIT_WINDOW_MS) {
+    return { count: 0, firstUseAt: null };
+  }
+  return { count: data.count || 0, firstUseAt: data.firstUseAt };
+}
+
+function dlSaveUsage(usage) {
+  try { localStorage.setItem(dlUsageKey(), JSON.stringify(usage)); } catch (e) { /* localStorage penuh/disabled, gak fatal — limit cuma gak konsisten sementara */ }
+}
+
+// Nambah counter sebanyak `n` (n=1 buat mode 1 Link, n=jumlah link buat Batch).
+// Dipanggil SETELAH validasi & pengecekan limit lolos, SEBELUM request ke
+// server benar-benar dikirim — biar link yang gagal diproses server tetap
+// kehitung (sama kayak defaultnya endpoint /api/download yang emang gak tau
+// apakah user jadi save filenya atau enggak).
+function dlAddUsage(n) {
+  const usage = dlGetUsage();
+  const next = { count: usage.count + n, firstUseAt: usage.firstUseAt || Date.now() };
+  dlSaveUsage(next);
+  dlRenderQuotaBadge();
+}
+
+// true kalau boleh lanjut, false kalau harus diblokir (toast sudah
+// ditampilkan sebelum return false, pemanggil cukup langsung `return`).
+function dlCheckQuota(n) {
+  if (typeof isPremium === 'function' && isPremium()) return true;
+  const usage = dlGetUsage();
+  if (usage.count + n > DL_DAILY_LIMIT) {
+    const sisa = Math.max(0, DL_DAILY_LIMIT - usage.count);
+    toast(`❌ Limit downloader gratis hari ini habis (${DL_DAILY_LIMIT}x/24 jam). Sisa kuota kamu: ${sisa}. Upgrade ke PRO buat unlimited.`, 'error');
+    return false;
+  }
+  return true;
+}
+
+// Tampilin sisa kuota di atas form — disembunyikan total buat guest (belum
+// login) dan buat user PRO (gak relevan, mereka unlimited), biar UI gak
+// berisik buat kasus yang gak butuh info ini.
+function dlRenderQuotaBadge() {
+  const badge = document.getElementById('dl-quota-badge');
+  if (!badge) return;
+  const session = (typeof getSession === 'function') ? getSession() : null;
+  if (!session || !session.email || (typeof isPremium === 'function' && isPremium())) {
+    badge.style.display = 'none';
+    return;
+  }
+  const usage = dlGetUsage();
+  const sisa = Math.max(0, DL_DAILY_LIMIT - usage.count);
+  badge.textContent = `🎟️ Sisa kuota downloader hari ini: ${sisa}/${DL_DAILY_LIMIT}`;
+  badge.style.display = 'block';
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', dlRenderQuotaBadge);
+} else {
+  dlRenderQuotaBadge();
+}
+
 async function dlBatchDownload() {
   const textarea = document.getElementById('dl-batch-urls');
   const qualitySelect = document.getElementById('dl-batch-quality');
   const btn = document.getElementById('dl-batch-btn');
   const resultsEl = document.getElementById('dl-batch-results');
 
+  const dlBatchSession = (typeof getSession === 'function') ? getSession() : null;
+  if (!dlBatchSession || !dlBatchSession.email) { toast('Login dulu buat pakai Downloader.', 'error'); return; }
   const urls = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
   if (!urls.length) { toast('Masukkan minimal 1 link!', 'error'); return; }
   if (urls.length > 5) { toast('Maksimal 5 link per batch', 'error'); return; }
   const urlPattern = /tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv|pinterest\.com|pin\.it/i;
   const invalid = urls.find(u => !urlPattern.test(u));
   if (invalid) { toast('Ada link yang gak dikenali: ' + invalid.slice(0, 40), 'error'); return; }
+  // Tiap link di batch kehitung 1 kuota (5 link = 5 kuota) — biar konsisten
+  // sama mode "1 Link" dan gak jadi celah buat dapat lebih banyak download
+  // gratis lewat batch.
+  if (!dlCheckQuota(urls.length)) return;
 
-  await dlRunBatchRequest(urls, qualitySelect.value, btn, resultsEl, '📦 Download Semua (ZIP)');
+  const ok = await dlRunBatchRequest(urls, qualitySelect.value, btn, resultsEl, '📦 Download Semua (ZIP)');
+  if (ok) dlAddUsage(urls.length);
 }
 
 async function dlPlaylistDownloadAll() {
   if (!dlCurrentPlaylistUrls.length) return;
+  if (!dlCheckQuota(dlCurrentPlaylistUrls.length)) return;
   const qualitySelect = document.getElementById('dl-playlist-quality');
   const btn = document.getElementById('dl-playlist-btn');
   const resultsEl = document.getElementById('dl-playlist-results');
-  await dlRunBatchRequest(dlCurrentPlaylistUrls, qualitySelect.value, btn, resultsEl, '📦 Download Semua (ZIP)');
+  const ok = await dlRunBatchRequest(dlCurrentPlaylistUrls, qualitySelect.value, btn, resultsEl, '📦 Download Semua (ZIP)');
+  if (ok) dlAddUsage(dlCurrentPlaylistUrls.length);
 }
 
+// Return true kalau batch beneran berhasil dapat file (dipakai pemanggil
+// buat nentuin apakah kuota harian perlu dipotong atau enggak — gagal total
+// gak boleh motong kuota, itu bukan salah user). Errornya sendiri tetap
+// ditelan di sini (bukan di-throw ulang) biar toast + finally cleanup di
+// bawah tetap konsisten kayak sebelumnya buat pemanggil yang belum peduli
+// return value-nya.
 async function dlRunBatchRequest(urls, quality, btn, resultsEl, defaultBtnText) {
   if (DL_API_BASE.includes('GANTI_DENGAN')) {
     toast('Backend downloader belum disambungkan.', 'error');
-    return;
+    return false;
   }
 
   btn.disabled = true; btn.textContent = `⏳ Memproses ${urls.length} link... (bisa beberapa menit)`;
@@ -10912,8 +11006,10 @@ async function dlRunBatchRequest(urls, quality, btn, resultsEl, defaultBtnText) 
       } catch (e) { /* biarin aja kalau parsing gagal, gak fatal */ }
     }
     toast('Batch download selesai!', 'success');
+    return true;
   } catch (e) {
     toast('❌ ' + (e.message || 'Gagal memproses batch download'), 'error');
+    return false;
   } finally {
     btn.disabled = false; btn.textContent = defaultBtnText;
   }
@@ -10933,9 +11029,12 @@ async function dlFetchInfo() {
   const resultEl = document.getElementById('dl-result');
 
   if (!url) { toast('Masukkan link video dulu!', 'error'); return; }
+  const dlSession = (typeof getSession === 'function') ? getSession() : null;
+  if (!dlSession || !dlSession.email) { toast('Login dulu buat pakai Downloader.', 'error'); return; }
   if (!/tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv|pinterest\.com|pin\.it/i.test(url)) {
     toast('Link tidak dikenali. Cek daftar platform yang didukung di deskripsi.', 'error'); return;
   }
+  if (!dlCheckQuota(1)) return;
   if (DL_API_BASE.includes('GANTI_DENGAN')) {
     toast('Backend downloader belum disambungkan. Lihat downloader-backend/README.md', 'error');
     return;
@@ -10970,6 +11069,7 @@ async function dlFetchInfo() {
       dlRenderPlaylist(data);
       toast(`Playlist ditemukan! ${data.entries.length} video`, 'success');
       dlLogUsageActivity(urlPlatform || data.platform);
+      dlAddUsage(1);
       return;
     }
 
@@ -10977,6 +11077,7 @@ async function dlFetchInfo() {
     document.getElementById('dl-thumb-badge').textContent = dlPlatformEmoji(data.platform);
     document.getElementById('dl-title').textContent = data.title || 'Video';
     dlLogUsageActivity(urlPlatform || data.platform);
+    dlAddUsage(1);
     const metaParts = [
       data.platform,
       data.isPhotoSet ? `📸 ${data.photoCount} foto` : (data.duration ? dlFormatDuration(data.duration) : ''),
