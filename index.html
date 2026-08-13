@@ -10836,11 +10836,13 @@ function dlRenderPlaylist(data) {
 }
 
 // ── Limit harian Downloader (khusus fitur ini, 8x/hari buat user gratis) ──
-// Disimpan di localStorage per akun (sama polanya kayak sistem premium yang
-// udah ada di premiumKey()/getPremiumData()) — bukan di server, jadi cukup
-// buat mencegah pemakaian gak sengaja berlebihan, bukan proteksi anti-abuse
-// yang ketat. User PRO (isPremium()===true) selalu unlimited, gak kena cek
-// ini sama sekali.
+// Disimpan di localStorage — per akun kalau sudah login (key pakai email),
+// per-device/browser kalau masih guest (key 'guest', sama-sama gak butuh
+// login). Sama polanya kayak sistem premium yang udah ada di
+// premiumKey()/getPremiumData()) — bukan di server, jadi cukup buat
+// mencegah pemakaian gak sengaja berlebihan, bukan proteksi anti-abuse yang
+// ketat. User PRO (isPremium()===true) selalu unlimited, gak kena cek ini
+// sama sekali.
 const DL_DAILY_LIMIT = 8;
 const DL_LIMIT_WINDOW_MS = 24 * 60 * 60 * 1000; // rolling 24 jam dari pemakaian pertama, bukan reset jam 00:00 tetap
 
@@ -10890,14 +10892,13 @@ function dlCheckQuota(n) {
   return true;
 }
 
-// Tampilin sisa kuota di atas form — disembunyikan total buat guest (belum
-// login) dan buat user PRO (gak relevan, mereka unlimited), biar UI gak
-// berisik buat kasus yang gak butuh info ini.
+// Tampilin sisa kuota di atas form — disembunyikan cuma buat user PRO (gak
+// relevan, mereka unlimited). Guest (belum login) TETAP ditampilin karena
+// sekarang guest juga kena limit yang sama, dihitung per-device.
 function dlRenderQuotaBadge() {
   const badge = document.getElementById('dl-quota-badge');
   if (!badge) return;
-  const session = (typeof getSession === 'function') ? getSession() : null;
-  if (!session || !session.email || (typeof isPremium === 'function' && isPremium())) {
+  if (typeof isPremium === 'function' && isPremium()) {
     badge.style.display = 'none';
     return;
   }
@@ -10918,8 +10919,6 @@ async function dlBatchDownload() {
   const btn = document.getElementById('dl-batch-btn');
   const resultsEl = document.getElementById('dl-batch-results');
 
-  const dlBatchSession = (typeof getSession === 'function') ? getSession() : null;
-  if (!dlBatchSession || !dlBatchSession.email) { toast('Login dulu buat pakai Downloader.', 'error'); return; }
   const urls = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
   if (!urls.length) { toast('Masukkan minimal 1 link!', 'error'); return; }
   if (urls.length > 5) { toast('Maksimal 5 link per batch', 'error'); return; }
@@ -11029,8 +11028,6 @@ async function dlFetchInfo() {
   const resultEl = document.getElementById('dl-result');
 
   if (!url) { toast('Masukkan link video dulu!', 'error'); return; }
-  const dlSession = (typeof getSession === 'function') ? getSession() : null;
-  if (!dlSession || !dlSession.email) { toast('Login dulu buat pakai Downloader.', 'error'); return; }
   if (!/tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv|pinterest\.com|pin\.it/i.test(url)) {
     toast('Link tidak dikenali. Cek daftar platform yang didukung di deskripsi.', 'error'); return;
   }
