@@ -20135,6 +20135,7 @@ function dmRenderInbox(docs, myEmail) {
   let html = '';
   rows.forEach(t => {
     const otherEmail = (t.participants || []).find(e => e !== myEmail) || '';
+    if (!otherEmail) return; // thread rusak (lawan chat kosong) — lewati, jangan ditampilkan
     const otherName = (t.participantNames && t.participantNames[otherEmail]) || otherEmail.split('@')[0] || 'User';
     const otherPhoto = (t.participantPhotos && t.participantPhotos[otherEmail]) || '';
     const otherPhotoGif = (t.participantPhotoIsGif && t.participantPhotoIsGif[otherEmail]) || false;
@@ -20211,6 +20212,7 @@ function dmStartChat(email, name, photo, photoIsGif) {
 async function dmOpenThread(otherEmail, otherName, otherPhoto, otherPhotoIsGif) {
   const session = dmRequireLogin();
   if (!session) return;
+  if (!otherEmail) { toast('Thread ini rusak (lawan chat tidak ditemukan) 😅', 'error'); return; }
   dmCloseInbox();
   dmCancelReply(); // reset sisa reply-target dari thread sebelumnya (kalau ada)
 
