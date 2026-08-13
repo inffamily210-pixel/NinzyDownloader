@@ -10842,7 +10842,7 @@ async function dlBatchDownload() {
   const urls = textarea.value.split('\n').map(s => s.trim()).filter(Boolean);
   if (!urls.length) { toast('Masukkan minimal 1 link!', 'error'); return; }
   if (urls.length > 5) { toast('Maksimal 5 link per batch', 'error'); return; }
-  const urlPattern = /tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv/i;
+  const urlPattern = /tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv|pinterest\.com|pin\.it/i;
   const invalid = urls.find(u => !urlPattern.test(u));
   if (invalid) { toast('Ada link yang gak dikenali: ' + invalid.slice(0, 40), 'error'); return; }
 
@@ -10933,7 +10933,7 @@ async function dlFetchInfo() {
   const resultEl = document.getElementById('dl-result');
 
   if (!url) { toast('Masukkan link video dulu!', 'error'); return; }
-  if (!/tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv/i.test(url)) {
+  if (!/tiktok\.com|youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|twitter\.com|x\.com|reddit\.com|redd\.it|soundcloud\.com|twitch\.tv|pinterest\.com|pin\.it/i.test(url)) {
     toast('Link tidak dikenali. Cek daftar platform yang didukung di deskripsi.', 'error'); return;
   }
   if (DL_API_BASE.includes('GANTI_DENGAN')) {
