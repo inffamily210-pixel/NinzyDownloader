@@ -1,15 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════
-// NINZY AI — Backend proxy route ke xAI (Grok) API
+// NINZY AI — Backend proxy route ke Google Gemini API
 // ═══════════════════════════════════════════════════════════════════
 // PENTING SOAL KEAMANAN:
-// - API key xAI HARUS di-set sebagai environment variable di Railway
-//   (Project → Variables → tambah XAI_API_KEY), JANGAN ditulis langsung
+// - API key Gemini HARUS di-set sebagai environment variable di Railway
+//   (Project → Variables → tambah GEMINI_API_KEY), JANGAN ditulis langsung
 //   di file ini, dan JANGAN di-commit ke git.
 // - Frontend (index.html) TIDAK PERNAH menyimpan/mengirim API key ini.
 //   Frontend cuma manggil endpoint /api/ninzy-ai/chat di backend kamu,
-//   lalu backend inilah yang nyimpen key & neruskan request ke xAI.
-// - Key yang sempat kamu kirim di chat sebelumnya sebaiknya di-revoke
-//   dan diganti baru di console xAI, karena sudah pernah terekspos.
+//   lalu backend inilah yang nyimpen key & neruskan request ke Gemini.
+// - Kalau kamu sempat menempel/kirim API key di tempat lain (chat, repo,
+//   screenshot, dsb), anggap key itu bocor: revoke & buat key baru di
+//   Google AI Studio (aistudio.google.com/apikey), lalu masukkan yang
+//   baru ke environment variable, bukan ke file ini.
 //
 // Cara pasang:
 // 1. Taruh file ini di folder backend (yang sama dengan server.js /
@@ -22,8 +24,8 @@
 //      app.use('/api/v1', ninzyAiRoute);
 //
 // 3. Di Railway dashboard → Variables, tambahkan:
-//      XAI_API_KEY = <API key baru dari console xAI>
-//    (opsional) XAI_MODEL = grok-4.3   ← ganti kalau xAI rilis model baru
+//      GEMINI_API_KEY = <API key baru dari Google AI Studio>
+//    (opsional) GEMINI_MODEL = gemini-flash-latest  ← ganti kalau perlu model lain
 //
 // 4. Butuh Node.js 18+ (sudah ada fetch() bawaan). Kalau Railway kamu
 //    pakai Node lebih lama, install node-fetch dan ganti baris fetch().
@@ -32,8 +34,8 @@
 const express = require('express');
 const router = express.Router();
 
-const XAI_API_KEY = process.env.XAI_API_KEY;
-const XAI_MODEL = process.env.XAI_MODEL || 'grok-4.3';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 const SYSTEM_PROMPT =
   'Kamu adalah "Ninzy Ai", asisten AI ramah di dalam aplikasi NinzyCompress ' +
@@ -63,8 +65,8 @@ function isRateLimited(ip) {
 
 router.post('/ninzy-ai/chat', async (req, res) => {
   try {
-    if (!XAI_API_KEY) {
-      console.error('[Ninzy Ai] XAI_API_KEY belum di-set di environment variables.');
+    if (!GEMINI_API_KEY) {
+      console.error('[Ninzy Ai] GEMINI_API_KEY belum di-set di environment variables.');
       return res.status(500).json({ success: false, error: 'Ninzy Ai belum dikonfigurasi di server.' });
     }
 
@@ -86,31 +88,48 @@ router.post('/ninzy-ai/chat', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Pesan terlalu panjang, coba dipersingkat.' });
     }
 
-    const xaiRes = await fetch('https://api.x.ai/v1/chat/completions', {
+    // Gemini tidak punya role "system" terpisah di contents seperti OpenAI/xAI.
+    // Kita kirim instruksi sistem lewat systemInstruction, dan ubah histori
+    // pesan ke format { role, parts: [{ text }] }, dengan role assistant -> "model".
+    const geminiContents = trimmed.map(m => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }]
+    }));
+
+    const geminiUrl =
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+    const geminiRes = await fetch(geminiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + XAI_API_KEY
+        'X-goog-api-key': GEMINI_API_KEY
       },
       body: JSON.stringify({
-        model: XAI_MODEL,
-        messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...trimmed],
-        temperature: 0.7,
-        max_tokens: 800
+        contents: geminiContents,
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 800
+        }
       })
     });
 
-    const data = await xaiRes.json().catch(() => ({}));
+    const data = await geminiRes.json().catch(() => ({}));
 
-    if (!xaiRes.ok) {
-      console.error('[Ninzy Ai] xAI API error:', xaiRes.status, data);
+    if (!geminiRes.ok) {
+      console.error('[Ninzy Ai] Gemini API error:', geminiRes.status, data);
       return res.status(502).json({
         success: false,
         error: data?.error?.message || 'Ninzy Ai lagi gangguan, coba lagi sebentar lagi.'
       });
     }
 
-    const reply = data?.choices?.[0]?.message?.content?.trim();
+    const reply = data?.candidates?.[0]?.content?.parts
+      ?.map(p => p.text || '')
+      .join('')
+      .trim();
+
     if (!reply) {
       return res.status(502).json({ success: false, error: 'Ninzy Ai tidak memberi balasan, coba lagi.' });
     }
